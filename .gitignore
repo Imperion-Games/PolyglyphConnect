@@ -1,0 +1,17 @@
+# Unreal build artefacts
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+
+# IDE / tooling
+.vs/
+.vscode/
+*.VC.db
+*.opensdf
+*.sdf
+*.suo
+
+# OS noise
+Thumbs.db
+.DS_Store
