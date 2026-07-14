@@ -5,7 +5,10 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleInterface.h"
 
-/** Editor module for PolyglyphConnect: registers the Polyglyph menu and its actions. */
+class FSpawnTabArgs;
+class SDockTab;
+
+/** Editor module for PolyglyphConnect: registers the single Polyglyph dashboard tab + menu entry. */
 class FPolyglyphConnectModule : public IModuleInterface
 {
 public:
@@ -15,13 +18,12 @@ public:
 	//~ End IModuleInterface
 
 private:
-	/** Register the Polyglyph submenu under the level editor's Tools menu. */
+	/** Register the single `Tools > Polyglyph` entry that opens the dashboard. */
 	void RegisterMenus();
 
-	/** Ping GET /api/plugin/status with the configured key/slug and report the result. */
-	void OnTestConnection();
+	/** Spawn the dockable Polyglyph dashboard tab. */
+	TSharedRef<SDockTab> OnSpawnDashboardTab(const FSpawnTabArgs& InArgs);
 
-	/** Push source strings to Polyglyph. Currently sends a probe payload until the
-	 *  Unreal localization gather is wired in. */
-	void OnPushSourceStrings();
+	/** Open or focus the Polyglyph dashboard tab. */
+	void OpenDashboard();
 };

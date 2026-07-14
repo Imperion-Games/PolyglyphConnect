@@ -2,12 +2,14 @@
 
 #include "PolyglyphConnect.h"
 
-#include "Framework/Notifications/NotificationManager.h"
-#include "Modules/ModuleManager.h"
-#include "PolyglyphClient.h"
-#include "PolyglyphTypes.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Docking/TabManager.h"
 #include "ToolMenus.h"
-#include "Widgets/Notifications/SNotificationList.h"
+#include "Widgets/Docking/SDockTab.h"
+#include "WorkspaceMenuStructure.h"
+#include "WorkspaceMenuStructureModule.h"
+
+#include "SPolyglyphPanel.h"
 
 #define LOCTEXT_NAMESPACE "PolyglyphConnect"
 
@@ -15,30 +17,33 @@ IMPLEMENT_MODULE(FPolyglyphConnectModule, PolyglyphConnect)
 
 namespace
 {
-	/** Non-blocking editor toast, green on success and red on failure. */
-	void NotifyResult(const FText& Message, const bool bSuccess)
-	{
-		FNotificationInfo Info(Message);
-		Info.ExpireDuration = 5.0f;
-		Info.bUseSuccessFailIcons = true;
-		const TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info);
-		if (Item.IsValid())
-		{
-			Item->SetCompletionState(bSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
-		}
-	}
+	/** Nomad tab id for the Polyglyph dashboard. */
+	const FName PolyglyphDashboardTabName(TEXT("PolyglyphDashboard"));
 }
 
 void FPolyglyphConnectModule::StartupModule()
 {
 	UToolMenus::RegisterStartupCallback(
 		FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FPolyglyphConnectModule::RegisterMenus));
+
+	FGlobalTabmanager::Get()
+		->RegisterNomadTabSpawner(
+			PolyglyphDashboardTabName,
+			FOnSpawnTab::CreateRaw(this, &FPolyglyphConnectModule::OnSpawnDashboardTab))
+		.SetDisplayName(LOCTEXT("PolyglyphTabTitle", "Polyglyph"))
+		.SetTooltipText(LOCTEXT("PolyglyphTabTooltipText", "Open the Polyglyph localization dashboard."))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory());
 }
 
 void FPolyglyphConnectModule::ShutdownModule()
 {
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::UnregisterOwner(this);
+
+	if (FSlateApplication::IsInitialized())
+	{
+		FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(PolyglyphDashboardTabName);
+	}
 }
 
 void FPolyglyphConnectModule::RegisterMenus()
@@ -49,84 +54,25 @@ void FPolyglyphConnectModule::RegisterMenus()
 	FToolMenuSection& Section = ToolsMenu->FindOrAddSection(
 		"Polyglyph", LOCTEXT("PolyglyphSection", "Polyglyph"));
 
-	Section.AddSubMenu(
-		"PolyglyphSubmenu",
+	Section.AddMenuEntry("PolyglyphDashboard",
 		LOCTEXT("PolyglyphLabel", "Polyglyph"),
-		LOCTEXT("PolyglyphTooltip", "Localization sync with the Polyglyph service"),
-		FNewToolMenuDelegate::CreateLambda([this](UToolMenu* SubMenu)
-		{
-			FToolMenuSection& Sub = SubMenu->FindOrAddSection("PolyglyphItems");
-
-			Sub.AddMenuEntry("TestConnection",
-				LOCTEXT("TestConnectionLabel", "Test Connection"),
-				LOCTEXT("TestConnectionTooltip", "Check the API key and project slug against the Polyglyph service."),
-				FSlateIcon(),
-				FUIAction(FExecuteAction::CreateRaw(this, &FPolyglyphConnectModule::OnTestConnection)));
-
-			Sub.AddMenuEntry("PushSourceStrings",
-				LOCTEXT("PushSourceStringsLabel", "Push Source Strings"),
-				LOCTEXT("PushSourceStringsTooltip", "Send source strings to Polyglyph (probe payload until the gather is wired in)."),
-				FSlateIcon(),
-				FUIAction(FExecuteAction::CreateRaw(this, &FPolyglyphConnectModule::OnPushSourceStrings)));
-		}));
+		LOCTEXT("PolyglyphTooltip", "Open the Polyglyph localization dashboard."),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateRaw(this, &FPolyglyphConnectModule::OpenDashboard)));
 }
 
-void FPolyglyphConnectModule::OnTestConnection()
+TSharedRef<SDockTab> FPolyglyphConnectModule::OnSpawnDashboardTab(const FSpawnTabArgs& InArgs)
 {
-	FPolyglyphClient::TestConnection([](const FPolyglyphResponse& Response)
-	{
-		if (Response.bSuccess && Response.Json.IsValid())
-		{
-			const int32 Total = static_cast<int32>(Response.Json->GetNumberField(TEXT("totalStrings")));
-			NotifyResult(
-				FText::Format(
-					LOCTEXT("TestConnectionOk", "Connected to Polyglyph. Project has {0} source strings."),
-					FText::AsNumber(Total)),
-				true);
-		}
-		else
-		{
-			NotifyResult(
-				FText::Format(
-					LOCTEXT("TestConnectionFail", "Polyglyph connection failed: {0}"),
-					FText::FromString(Response.Error)),
-				false);
-		}
-	});
+	return SNew(SDockTab)
+		.TabRole(ETabRole::NomadTab)
+		[
+			SNew(SPolyglyphPanel)
+		];
 }
 
-void FPolyglyphConnectModule::OnPushSourceStrings()
+void FPolyglyphConnectModule::OpenDashboard()
 {
-	// Probe payload. Real source text will come from the UE localization gather; see the
-	// Brain notes (Plugins/PolyglyphConnect/Reference.md) for the planned mapping.
-	TArray<FPolyglyphSourceString> Strings;
-	FPolyglyphSourceString Probe;
-	Probe.Namespace = TEXT("PolyglyphConnect");
-	Probe.Key = TEXT("ConnectionProbe");
-	Probe.SourceText = TEXT("Hello from Unreal");
-	Probe.Context = TEXT("Connectivity probe pushed by PolyglyphConnect");
-	Strings.Add(Probe);
-
-	FPolyglyphClient::PushStrings(Strings, [](const FPolyglyphResponse& Response)
-	{
-		if (Response.bSuccess && Response.Json.IsValid())
-		{
-			const int32 Total = static_cast<int32>(Response.Json->GetNumberField(TEXT("total")));
-			NotifyResult(
-				FText::Format(
-					LOCTEXT("PushOk", "Pushed {0} string(s) to Polyglyph."),
-					FText::AsNumber(Total)),
-				true);
-		}
-		else
-		{
-			NotifyResult(
-				FText::Format(
-					LOCTEXT("PushFail", "Polyglyph push failed: {0}"),
-					FText::FromString(Response.Error)),
-				false);
-		}
-	});
+	FGlobalTabmanager::Get()->TryInvokeTab(FTabId(PolyglyphDashboardTabName));
 }
 
 #undef LOCTEXT_NAMESPACE

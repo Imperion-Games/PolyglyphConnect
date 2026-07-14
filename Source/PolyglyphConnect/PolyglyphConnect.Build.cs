@@ -27,6 +27,9 @@ public class PolyglyphConnect : ModuleRules
 			"HTTP",
 			"Json",
 			"JsonUtilities",
+			"Settings",
+			"WorkspaceMenuStructure",
+			"Localization",
 		});
 	}
 }

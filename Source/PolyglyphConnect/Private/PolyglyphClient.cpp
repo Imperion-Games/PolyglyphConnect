@@ -7,6 +7,7 @@
 #include "GenericPlatform/GenericPlatformHttp.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpResponse.h"
+#include "PolyglyphProjectSettings.h"
 #include "PolyglyphSettings.h"
 #include "PolyglyphTypes.h"
 #include "Serialization/JsonReader.h"
@@ -18,18 +19,19 @@ TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> FPolyglyphClient::MakeRequest(
 	const FString& Path,
 	FString& OutError)
 {
-	const UPolyglyphSettings* Settings = GetDefault<UPolyglyphSettings>();
-	if (Settings->BaseUrl.IsEmpty() || Settings->ApiKey.IsEmpty() || Settings->ProjectSlug.IsEmpty())
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
+	const UPolyglyphSettings* User = GetDefault<UPolyglyphSettings>();
+	if (Project->BaseUrl.IsEmpty() || Project->ProjectSlug.IsEmpty() || User->ApiKey.IsEmpty())
 	{
-		OutError = TEXT("Set the API base URL, project slug, and API key in "
-			"Editor Preferences > Plugins > Polyglyph.");
+		OutError = TEXT("Set the API base URL and project slug in Project Settings > Plugins > "
+			"Polyglyph, and your API key in Editor Preferences > Plugins > Polyglyph.");
 		return nullptr;
 	}
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = FHttpModule::Get().CreateRequest();
-	Request->SetURL(Settings->BaseUrl + Path);
+	Request->SetURL(Project->BaseUrl + Path);
 	Request->SetVerb(Verb);
-	Request->SetHeader(TEXT("X-Polyglyph-Key"), Settings->ApiKey);
+	Request->SetHeader(TEXT("X-Polyglyph-Key"), User->ApiKey);
 	Request->SetHeader(TEXT("Accept"), TEXT("application/json"));
 	return Request;
 }
@@ -83,10 +85,10 @@ void FPolyglyphClient::Send(
 
 void FPolyglyphClient::TestConnection(TFunction<void(const FPolyglyphResponse&)> OnComplete)
 {
-	const UPolyglyphSettings* Settings = GetDefault<UPolyglyphSettings>();
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
 	const FString Path = FString::Printf(
 		TEXT("/api/plugin/status?projectSlug=%s"),
-		*FGenericPlatformHttp::UrlEncode(Settings->ProjectSlug));
+		*FGenericPlatformHttp::UrlEncode(Project->ProjectSlug));
 
 	FString Error;
 	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(TEXT("GET"), Path, Error);
@@ -105,7 +107,7 @@ void FPolyglyphClient::PushStrings(
 	const TArray<FPolyglyphSourceString>& Strings,
 	TFunction<void(const FPolyglyphResponse&)> OnComplete)
 {
-	const UPolyglyphSettings* Settings = GetDefault<UPolyglyphSettings>();
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
 
 	FString Error;
 	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request =
@@ -137,7 +139,7 @@ void FPolyglyphClient::PushStrings(
 	}
 
 	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
-	Root->SetStringField(TEXT("projectSlug"), Settings->ProjectSlug);
+	Root->SetStringField(TEXT("projectSlug"), Project->ProjectSlug);
 	Root->SetArrayField(TEXT("strings"), Items);
 
 	FString Body;
@@ -146,6 +148,91 @@ void FPolyglyphClient::PushStrings(
 
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	Request->SetContentAsString(Body);
+
+	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+}
+
+void FPolyglyphClient::PullTranslations(
+	const FString& Culture,
+	TFunction<void(const FPolyglyphResponse&)> OnComplete)
+{
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
+	const FString Path = FString::Printf(
+		TEXT("/api/plugin/pull?projectSlug=%s&language=%s&onlyApproved=true"),
+		*FGenericPlatformHttp::UrlEncode(Project->ProjectSlug),
+		*FGenericPlatformHttp::UrlEncode(Culture));
+
+	FString Error;
+	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(TEXT("GET"), Path, Error);
+	if (!Request.IsValid())
+	{
+		FPolyglyphResponse Result;
+		Result.Error = Error;
+		OnComplete(Result);
+		return;
+	}
+
+	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+}
+
+void FPolyglyphClient::TriggerTranslate(
+	const FString& Language,
+	const FString& Mode,
+	bool bMock,
+	TFunction<void(const FPolyglyphResponse&)> OnComplete)
+{
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
+
+	FString Error;
+	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request =
+		MakeRequest(TEXT("POST"), TEXT("/api/plugin/translate"), Error);
+	if (!Request.IsValid())
+	{
+		FPolyglyphResponse Result;
+		Result.Error = Error;
+		OnComplete(Result);
+		return;
+	}
+
+	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetStringField(TEXT("projectSlug"), Project->ProjectSlug);
+	Root->SetStringField(TEXT("language"), Language);
+	if (!Mode.IsEmpty())
+	{
+		Root->SetStringField(TEXT("mode"), Mode);
+	}
+	if (bMock)
+	{
+		Root->SetBoolField(TEXT("mock"), true);
+	}
+
+	FString Body;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
+	FJsonSerializer::Serialize(Root, Writer);
+
+	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	Request->SetContentAsString(Body);
+
+	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+}
+
+void FPolyglyphClient::GetJob(
+	const FString& JobId,
+	TFunction<void(const FPolyglyphResponse&)> OnComplete)
+{
+	const FString Path = FString::Printf(
+		TEXT("/api/plugin/jobs/%s"),
+		*FGenericPlatformHttp::UrlEncode(JobId));
+
+	FString Error;
+	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(TEXT("GET"), Path, Error);
+	if (!Request.IsValid())
+	{
+		FPolyglyphResponse Result;
+		Result.Error = Error;
+		OnComplete(Result);
+		return;
+	}
 
 	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
 }

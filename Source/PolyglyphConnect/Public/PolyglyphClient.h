@@ -26,7 +26,7 @@ struct FPolyglyphResponse
 
 /**
  * HTTP client for the Polyglyph plugin API. Stateless: each call reads the current
- * UPolyglyphSettings, fires one async request, and delivers the parsed result to the
+ * connection settings, fires one async request, and delivers the parsed result to the
  * callback on the game thread. Authentication is the X-Polyglyph-Key header.
  */
 class POLYGLYPHCONNECT_API FPolyglyphClient
@@ -38,6 +38,24 @@ public:
 	/** POST /api/plugin/push to upsert the given source strings. */
 	static void PushStrings(
 		const TArray<FPolyglyphSourceString>& Strings,
+		TFunction<void(const FPolyglyphResponse&)> OnComplete);
+
+	/** GET /api/plugin/pull for one culture's approved translations. */
+	static void PullTranslations(
+		const FString& Culture,
+		TFunction<void(const FPolyglyphResponse&)> OnComplete);
+
+	/** POST /api/plugin/translate to start a job for one language. Mode is sync/batch/auto
+	 *  (empty lets the server choose); bMock fills placeholders with no AI cost. */
+	static void TriggerTranslate(
+		const FString& Language,
+		const FString& Mode,
+		bool bMock,
+		TFunction<void(const FPolyglyphResponse&)> OnComplete);
+
+	/** GET /api/plugin/jobs/:jobId for a translation job's status. */
+	static void GetJob(
+		const FString& JobId,
 		TFunction<void(const FPolyglyphResponse&)> OnComplete);
 
 private:
