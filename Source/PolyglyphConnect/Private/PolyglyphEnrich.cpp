@@ -18,22 +18,38 @@ namespace
 		return InCells.IsValidIndex(InIndex) ? InCells[InIndex].TrimStartAndEnd() : FString();
 	}
 
-	/** Build a human-readable summary from an /enrich response body ({ updated, unmatched, total }).
-	 *  Enrich only binds keys that already exist, so any unmatched (namespace, key) pairs are the
-	 *  keys that were not pushed yet; they are listed so the caller knows to push them first. */
-	FString SummariseEnrich(const TSharedPtr<FJsonObject>& InJson)
+	/** The server caps /api/plugin/enrich at 5000 items per request, so a larger binding-map is
+	 *  sent as sequential chunks of this size. */
+	constexpr int32 GEnrichChunkSize = 5000;
+
+	/** Running totals across all chunks of one enrich push. */
+	struct FEnrichAggregate
+	{
+		/** Items sent, summed over chunks. */
+		int32 Total = 0;
+
+		/** Keys that received at least one metadata change, summed over chunks. */
+		int32 Updated = 0;
+
+		/** "namespace/key" pairs that matched no existing key (need a push first). */
+		TArray<FString> Unmatched;
+	};
+
+	/** Fold one /enrich response body ({ updated, unmatched, total }) into the running totals. */
+	void AccumulateEnrich(const TSharedPtr<FJsonObject>& InJson, FEnrichAggregate& InOutAggregate)
 	{
 		if (!InJson.IsValid())
 		{
-			return TEXT("Enrich succeeded, but the server sent no summary.");
+			return;
 		}
 
 		int32 Total = 0;
 		int32 Updated = 0;
 		InJson->TryGetNumberField(TEXT("total"), Total);
 		InJson->TryGetNumberField(TEXT("updated"), Updated);
+		InOutAggregate.Total += Total;
+		InOutAggregate.Updated += Updated;
 
-		TArray<FString> Unmatched;
 		const TArray<TSharedPtr<FJsonValue>>* UnmatchedValues = nullptr;
 		if (InJson->TryGetArrayField(TEXT("unmatched"), UnmatchedValues) && UnmatchedValues != nullptr)
 		{
@@ -45,30 +61,77 @@ namespace
 					FString Namespace, Key;
 					Object->TryGetStringField(TEXT("namespace"), Namespace);
 					Object->TryGetStringField(TEXT("key"), Key);
-					Unmatched.Add(FString::Printf(TEXT("%s/%s"), *Namespace, *Key));
+					InOutAggregate.Unmatched.Add(FString::Printf(TEXT("%s/%s"), *Namespace, *Key));
 				}
 			}
 		}
+	}
 
+	/** Build the final human-readable summary. Enrich only binds keys that already exist, so any
+	 *  unmatched (namespace, key) pairs are keys that were not pushed yet; they are listed (capped)
+	 *  so the caller knows to push them first. */
+	FString SummariseAggregate(const FEnrichAggregate& InAggregate)
+	{
 		FString Summary = FString::Printf(
-			TEXT("Enrich complete: bound %d key(s) from %d item(s)."), Updated, Total);
+			TEXT("Enrich complete: bound %d key(s) from %d item(s)."),
+			InAggregate.Updated, InAggregate.Total);
 
-		if (Unmatched.Num() > 0)
+		if (InAggregate.Unmatched.Num() > 0)
 		{
 			// List a handful so the log stays readable; the count tells the full story.
 			const int32 ShowMax = 10;
-			TArray<FString> Shown(Unmatched.GetData(), FMath::Min(Unmatched.Num(), ShowMax));
+			const TArray<FString> Shown(
+				InAggregate.Unmatched.GetData(), FMath::Min(InAggregate.Unmatched.Num(), ShowMax));
 			FString List = FString::Join(Shown, TEXT(", "));
-			if (Unmatched.Num() > ShowMax)
+			if (InAggregate.Unmatched.Num() > ShowMax)
 			{
-				List += FString::Printf(TEXT(", and %d more"), Unmatched.Num() - ShowMax);
+				List += FString::Printf(TEXT(", and %d more"), InAggregate.Unmatched.Num() - ShowMax);
 			}
 			Summary += FString::Printf(
 				TEXT(" %d not in the project yet (push these keys first): %s"),
-				Unmatched.Num(), *List);
+				InAggregate.Unmatched.Num(), *List);
 		}
 
 		return Summary;
+	}
+
+	/** Send the chunk starting at InStart, then recurse to the next chunk on success. All state is
+	 *  shared so it survives the async callbacks (which fire on the game thread, so no atomics). */
+	void SendEnrichChunk(
+		const TSharedRef<TArray<FPolyglyphEnrichItem>>& InItems,
+		int32 InStart,
+		const TSharedRef<FEnrichAggregate>& InAggregate,
+		const TSharedRef<TFunction<void(bool, const FString&)>>& InDone)
+	{
+		const int32 ChunkCount = FMath::Min(GEnrichChunkSize, InItems->Num() - InStart);
+		const TArray<FPolyglyphEnrichItem> Chunk(InItems->GetData() + InStart, ChunkCount);
+
+		FPolyglyphClient::EnrichStrings(Chunk,
+			[InItems, InStart, InAggregate, InDone](const FPolyglyphResponse& Response)
+			{
+				if (!Response.bSuccess)
+				{
+					// Earlier chunks already committed server-side; say how many bound before the failure.
+					const FString Message = InAggregate->Updated > 0
+						? FString::Printf(TEXT("Enrich failed after binding %d key(s): %s"),
+							InAggregate->Updated, *Response.Error)
+						: FString::Printf(TEXT("Enrich failed: %s"), *Response.Error);
+					(*InDone)(false, Message);
+					return;
+				}
+
+				AccumulateEnrich(Response.Json, *InAggregate);
+
+				const int32 Next = InStart + GEnrichChunkSize;
+				if (Next < InItems->Num())
+				{
+					SendEnrichChunk(InItems, Next, InAggregate, InDone);
+				}
+				else
+				{
+					(*InDone)(true, SummariseAggregate(*InAggregate));
+				}
+			});
 	}
 }
 
@@ -137,16 +200,18 @@ bool FPolyglyphEnrich::BuildFromCsv(const FString& InCsvPath, TArray<FPolyglyphE
 
 void FPolyglyphEnrich::Push(const TArray<FPolyglyphEnrichItem>& InItems, TFunction<void(bool, const FString&)> OnDone)
 {
-	FPolyglyphClient::EnrichStrings(InItems,
-		[Done = MoveTemp(OnDone)](const FPolyglyphResponse& Response)
-		{
-			if (Response.bSuccess)
-			{
-				Done(true, SummariseEnrich(Response.Json));
-			}
-			else
-			{
-				Done(false, FString::Printf(TEXT("Enrich failed: %s"), *Response.Error));
-			}
-		});
+	if (InItems.Num() == 0)
+	{
+		OnDone(false, TEXT("No enrichment items to send."));
+		return;
+	}
+
+	// Send in sequential chunks (the server caps one request at GEnrichChunkSize). Shared storage
+	// keeps the items and running totals alive across the async chunk callbacks.
+	const TSharedRef<TArray<FPolyglyphEnrichItem>> Items = MakeShared<TArray<FPolyglyphEnrichItem>>(InItems);
+	const TSharedRef<FEnrichAggregate> Aggregate = MakeShared<FEnrichAggregate>();
+	const TSharedRef<TFunction<void(bool, const FString&)>> Done =
+		MakeShared<TFunction<void(bool, const FString&)>>(MoveTemp(OnDone));
+
+	SendEnrichChunk(Items, 0, Aggregate, Done);
 }

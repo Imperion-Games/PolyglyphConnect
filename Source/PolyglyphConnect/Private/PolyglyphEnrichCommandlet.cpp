@@ -76,7 +76,11 @@ int32 UPolyglyphEnrichCommandlet::Main(const FString& Params)
 		Summary = InSummary;
 		bDone = true;
 	});
-	FPolyglyphClient::PumpHttp(bDone, 300.0);
+
+	// Push sends one request per 5000 items (the server cap), sequentially, so give the wait
+	// headroom for every chunk rather than a single flat timeout.
+	const double TimeoutSeconds = FMath::Max(300.0, FMath::DivideAndRoundUp(Items.Num(), 5000) * 120.0);
+	FPolyglyphClient::PumpHttp(bDone, TimeoutSeconds);
 
 	UE_LOG(LogPolyglyphEnrich, Display, TEXT("%s"), *Summary);
 	return bOk ? 0 : 1;
