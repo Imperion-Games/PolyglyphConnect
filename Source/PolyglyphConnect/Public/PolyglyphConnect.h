@@ -5,10 +5,13 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleInterface.h"
 
-class FSpawnTabArgs;
-class SDockTab;
+class FPolyglyphLocalizationServiceProvider;
 
-/** Editor module for PolyglyphConnect: registers the single Polyglyph dashboard tab + menu entry. */
+/**
+ * Editor module for PolyglyphConnect. Owns the single Polyglyph localization service provider
+ * and registers it with the "LocalizationService" modular feature so it appears in the native
+ * Localization Dashboard's service picker.
+ */
 class FPolyglyphConnectModule : public IModuleInterface
 {
 public:
@@ -17,13 +20,13 @@ public:
 	virtual void ShutdownModule() override;
 	//~ End IModuleInterface
 
+	/** Load-on-demand access to the module. */
+	static FPolyglyphConnectModule& Get();
+
+	/** The one provider instance owned by this module. */
+	FPolyglyphLocalizationServiceProvider& GetProvider() const;
+
 private:
-	/** Register the single `Tools > Polyglyph` entry that opens the dashboard. */
-	void RegisterMenus();
-
-	/** Spawn the dockable Polyglyph dashboard tab. */
-	TSharedRef<SDockTab> OnSpawnDashboardTab(const FSpawnTabArgs& InArgs);
-
-	/** Open or focus the Polyglyph dashboard tab. */
-	void OpenDashboard();
+	/** The single provider registered with the LocalizationService feature registry. */
+	TUniquePtr<FPolyglyphLocalizationServiceProvider> Provider;
 };

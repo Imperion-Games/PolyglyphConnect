@@ -46,6 +46,35 @@ struct FPolyglyphTranslation
 };
 
 /**
+ * One enrichment record attaching translator-context metadata to an existing key (mirrors a
+ * planned POST /api/plugin/enrich item). Character voice, grammatical gender, register, and a
+ * max display length all ride this single channel, keyed by namespace + key.
+ */
+struct FPolyglyphEnrichItem
+{
+	/** Localization namespace of the key to enrich. */
+	FString Namespace;
+
+	/** Localization key to enrich. */
+	FString Key;
+
+	/** Speaker/character name whose voice profile the translator should honour. */
+	FString Character;
+
+	/** Grammatical gender hint, e.g. "masculine" / "feminine" / "neuter". */
+	FString Gender;
+
+	/** Register hint, e.g. "formal" / "casual" (drives the T-V choice). */
+	FString Register;
+
+	/** Optional maximum display length in characters; 0 means unset. */
+	int32 MaxLength = 0;
+
+	/** Free-text note appended to the string's translation context. */
+	FString Context;
+};
+
+/**
  * A translation job started for one language (from POST /api/plugin/translate).
  */
 struct FPolyglyphTriggeredJob

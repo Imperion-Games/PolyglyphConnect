@@ -7,6 +7,7 @@
 
 class FJsonObject;
 struct FPolyglyphSourceString;
+struct FPolyglyphEnrichItem;
 
 /** Result of a Polyglyph API call, delivered to the callback on the game thread. */
 struct FPolyglyphResponse
@@ -57,6 +58,22 @@ public:
 	static void GetJob(
 		const FString& JobId,
 		TFunction<void(const FPolyglyphResponse&)> OnComplete);
+
+	/** GET /api/plugin/export?format=po for one culture. Delivers the raw PO text (not JSON)
+	 *  on success, or an error string, so callers can write the file the dashboard imports. */
+	static void ExportCulturePo(
+		const FString& Culture,
+		TFunction<void(bool bSuccess, const FString& PoTextOrError)> OnComplete);
+
+	/** POST /api/plugin/enrich to attach translator-context metadata (character, gender,
+	 *  register, max length, context) to existing keys. Planned Polyglyph endpoint. */
+	static void EnrichStrings(
+		const TArray<FPolyglyphEnrichItem>& Items,
+		TFunction<void(const FPolyglyphResponse&)> OnComplete);
+
+	/** Drive the HTTP manager on the calling thread until bDone flips or the timeout elapses,
+	 *  so a request can be run synchronously (commandlets, blocking service operations). */
+	static void PumpHttp(const bool& bDone, double TimeoutSeconds);
 
 private:
 	/** Build an authenticated request to BaseUrl + Path. Returns null and fills OutError

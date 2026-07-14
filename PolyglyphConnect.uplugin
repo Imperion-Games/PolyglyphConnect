@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
 	"Version": 1,
-	"VersionName": "0.1",
+	"VersionName": "0.2",
 	"FriendlyName": "PolyglyphConnect",
-	"Description": "Connects an Unreal project to the Polyglyph localization service: gather source text, push it for AI translation and human review, then pull approved translations back into the engine's native localization.",
+	"Description": "Localization service provider for Polyglyph. Adds Polyglyph to the native Localization Dashboard (push source, translate, pull approved) and ships utility commandlets to feed custom translator context such as character voice.",
 	"Category": "Localization",
 	"CreatedBy": "ToaGames",
 	"CreatedByURL": "",

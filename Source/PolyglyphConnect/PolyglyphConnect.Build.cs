@@ -20,16 +20,15 @@ public class PolyglyphConnect : ModuleRules
 			"UnrealEd",
 			"Slate",
 			"SlateCore",
-			"ToolMenus",
 			"InputCore",
 			"DeveloperSettings",
+			"Settings",
 			"Projects",
 			"HTTP",
 			"Json",
 			"JsonUtilities",
-			"Settings",
-			"WorkspaceMenuStructure",
 			"Localization",
+			"LocalizationService",
 		});
 	}
 }

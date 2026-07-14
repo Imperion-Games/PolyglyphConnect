@@ -5,6 +5,9 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "GenericPlatform/GenericPlatformHttp.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "HttpManager.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpResponse.h"
 #include "PolyglyphProjectSettings.h"
@@ -235,4 +238,117 @@ void FPolyglyphClient::GetJob(
 	}
 
 	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+}
+
+void FPolyglyphClient::ExportCulturePo(
+	const FString& Culture,
+	TFunction<void(bool bSuccess, const FString& PoTextOrError)> OnComplete)
+{
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
+	const FString Path = FString::Printf(
+		TEXT("/api/plugin/export?projectSlug=%s&language=%s&format=po&onlyApproved=true"),
+		*FGenericPlatformHttp::UrlEncode(Project->ProjectSlug),
+		*FGenericPlatformHttp::UrlEncode(Culture));
+
+	FString Error;
+	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(TEXT("GET"), Path, Error);
+	if (!Request.IsValid())
+	{
+		OnComplete(false, Error);
+		return;
+	}
+
+	// The export body is a PO file, not JSON, so read the raw content instead of using Send.
+	Request->OnProcessRequestComplete().BindLambda(
+		[OnComplete = MoveTemp(OnComplete)](FHttpRequestPtr, FHttpResponsePtr Resp, bool bConnected)
+		{
+			if (!bConnected || !Resp.IsValid())
+			{
+				OnComplete(false, TEXT("Could not reach the Polyglyph server. "
+					"Check the base URL and your network."));
+				return;
+			}
+
+			const int32 StatusCode = Resp->GetResponseCode();
+			if (StatusCode >= 200 && StatusCode < 300)
+			{
+				OnComplete(true, Resp->GetContentAsString());
+			}
+			else
+			{
+				OnComplete(false, FString::Printf(TEXT("Server returned HTTP %d."), StatusCode));
+			}
+		});
+
+	Request->ProcessRequest();
+}
+
+void FPolyglyphClient::EnrichStrings(
+	const TArray<FPolyglyphEnrichItem>& Items,
+	TFunction<void(const FPolyglyphResponse&)> OnComplete)
+{
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
+
+	FString Error;
+	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request =
+		MakeRequest(TEXT("POST"), TEXT("/api/plugin/enrich"), Error);
+	if (!Request.IsValid())
+	{
+		FPolyglyphResponse Result;
+		Result.Error = Error;
+		OnComplete(Result);
+		return;
+	}
+
+	TArray<TSharedPtr<FJsonValue>> ItemValues;
+	for (const FPolyglyphEnrichItem& Item : Items)
+	{
+		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetStringField(TEXT("namespace"), Item.Namespace);
+		Object->SetStringField(TEXT("key"), Item.Key);
+		if (!Item.Character.IsEmpty())
+		{
+			Object->SetStringField(TEXT("character"), Item.Character);
+		}
+		if (!Item.Gender.IsEmpty())
+		{
+			Object->SetStringField(TEXT("gender"), Item.Gender);
+		}
+		if (!Item.Register.IsEmpty())
+		{
+			Object->SetStringField(TEXT("register"), Item.Register);
+		}
+		if (Item.MaxLength > 0)
+		{
+			Object->SetNumberField(TEXT("maxLength"), Item.MaxLength);
+		}
+		if (!Item.Context.IsEmpty())
+		{
+			Object->SetStringField(TEXT("context"), Item.Context);
+		}
+		ItemValues.Add(MakeShared<FJsonValueObject>(Object));
+	}
+
+	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetStringField(TEXT("projectSlug"), Project->ProjectSlug);
+	Root->SetArrayField(TEXT("items"), ItemValues);
+
+	FString Body;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
+	FJsonSerializer::Serialize(Root, Writer);
+
+	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	Request->SetContentAsString(Body);
+
+	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+}
+
+void FPolyglyphClient::PumpHttp(const bool& bDone, double TimeoutSeconds)
+{
+	const double Start = FPlatformTime::Seconds();
+	while (!bDone && (FPlatformTime::Seconds() - Start) < TimeoutSeconds)
+	{
+		FHttpModule::Get().GetHttpManager().Tick(0.05f);
+		FPlatformProcess::Sleep(0.05f);
+	}
 }
