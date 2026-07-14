@@ -2,6 +2,8 @@
 
 #include "PolyglyphEnrich.h"
 
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -14,6 +16,59 @@ namespace
 	FString Cell(const TArray<FString>& InCells, int32 InIndex)
 	{
 		return InCells.IsValidIndex(InIndex) ? InCells[InIndex].TrimStartAndEnd() : FString();
+	}
+
+	/** Build a human-readable summary from an /enrich response body ({ updated, unmatched, total }).
+	 *  Enrich only binds keys that already exist, so any unmatched (namespace, key) pairs are the
+	 *  keys that were not pushed yet; they are listed so the caller knows to push them first. */
+	FString SummariseEnrich(const TSharedPtr<FJsonObject>& InJson)
+	{
+		if (!InJson.IsValid())
+		{
+			return TEXT("Enrich succeeded, but the server sent no summary.");
+		}
+
+		int32 Total = 0;
+		int32 Updated = 0;
+		InJson->TryGetNumberField(TEXT("total"), Total);
+		InJson->TryGetNumberField(TEXT("updated"), Updated);
+
+		TArray<FString> Unmatched;
+		const TArray<TSharedPtr<FJsonValue>>* UnmatchedValues = nullptr;
+		if (InJson->TryGetArrayField(TEXT("unmatched"), UnmatchedValues) && UnmatchedValues != nullptr)
+		{
+			for (const TSharedPtr<FJsonValue>& Value : *UnmatchedValues)
+			{
+				const TSharedPtr<FJsonObject> Object = Value->AsObject();
+				if (Object.IsValid())
+				{
+					FString Namespace, Key;
+					Object->TryGetStringField(TEXT("namespace"), Namespace);
+					Object->TryGetStringField(TEXT("key"), Key);
+					Unmatched.Add(FString::Printf(TEXT("%s/%s"), *Namespace, *Key));
+				}
+			}
+		}
+
+		FString Summary = FString::Printf(
+			TEXT("Enrich complete: bound %d key(s) from %d item(s)."), Updated, Total);
+
+		if (Unmatched.Num() > 0)
+		{
+			// List a handful so the log stays readable; the count tells the full story.
+			const int32 ShowMax = 10;
+			TArray<FString> Shown(Unmatched.GetData(), FMath::Min(Unmatched.Num(), ShowMax));
+			FString List = FString::Join(Shown, TEXT(", "));
+			if (Unmatched.Num() > ShowMax)
+			{
+				List += FString::Printf(TEXT(", and %d more"), Unmatched.Num() - ShowMax);
+			}
+			Summary += FString::Printf(
+				TEXT(" %d not in the project yet (push these keys first): %s"),
+				Unmatched.Num(), *List);
+		}
+
+		return Summary;
 	}
 }
 
@@ -82,13 +137,12 @@ bool FPolyglyphEnrich::BuildFromCsv(const FString& InCsvPath, TArray<FPolyglyphE
 
 void FPolyglyphEnrich::Push(const TArray<FPolyglyphEnrichItem>& InItems, TFunction<void(bool, const FString&)> OnDone)
 {
-	const int32 Count = InItems.Num();
 	FPolyglyphClient::EnrichStrings(InItems,
-		[Count, Done = MoveTemp(OnDone)](const FPolyglyphResponse& Response)
+		[Done = MoveTemp(OnDone)](const FPolyglyphResponse& Response)
 		{
 			if (Response.bSuccess)
 			{
-				Done(true, FString::Printf(TEXT("Enriched %d key(s)."), Count));
+				Done(true, SummariseEnrich(Response.Json));
 			}
 			else
 			{
