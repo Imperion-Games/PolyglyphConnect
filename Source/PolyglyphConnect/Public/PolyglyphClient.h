@@ -36,7 +36,10 @@ public:
 	/** GET /api/plugin/status for the configured project (the connection check). */
 	static void TestConnection(TFunction<void(const FPolyglyphResponse&)> OnComplete);
 
-	/** POST /api/plugin/push to upsert the given source strings. */
+	/** POST /api/plugin/push to upsert the given source strings. Large payloads are sent as
+	 *  several sequential requests under the server's body limit; OnComplete fires once with an
+	 *  aggregated response ({ created, updated, total } summed across requests). Push is an
+	 *  upsert, so a mid-run failure is safe to retry by pushing again. */
 	static void PushStrings(
 		const TArray<FPolyglyphSourceString>& Strings,
 		TFunction<void(const FPolyglyphResponse&)> OnComplete);
@@ -66,7 +69,9 @@ public:
 		TFunction<void(bool bSuccess, const FString& PoTextOrError)> OnComplete);
 
 	/** POST /api/plugin/enrich to attach translator-context metadata (character, gender,
-	 *  register, max length, context) to existing keys. Planned Polyglyph endpoint. */
+	 *  register, max length, context) to existing keys. Large batches are sent as several
+	 *  sequential requests under the server's item and body caps; OnComplete fires once with an
+	 *  aggregated response ({ updated, total, unmatched[] } merged across requests). */
 	static void EnrichStrings(
 		const TArray<FPolyglyphEnrichItem>& Items,
 		TFunction<void(const FPolyglyphResponse&)> OnComplete);
@@ -87,4 +92,20 @@ private:
 	static void Send(
 		const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& Request,
 		TFunction<void(const FPolyglyphResponse&)> OnComplete);
+
+	/** Send push chunk ChunkIndex, fold its counts into Aggregate, then chain to the next chunk
+	 *  or deliver the aggregated response. */
+	static void SendPushChunk(
+		const TSharedRef<TArray<TArray<FPolyglyphSourceString>>>& Chunks,
+		int32 ChunkIndex,
+		const TSharedRef<FJsonObject>& Aggregate,
+		const TSharedRef<TFunction<void(const FPolyglyphResponse&)>>& OnComplete);
+
+	/** Send enrich chunk ChunkIndex, fold its counts and unmatched list into Aggregate, then
+	 *  chain to the next chunk or deliver the aggregated response. */
+	static void SendEnrichChunk(
+		const TSharedRef<TArray<TArray<FPolyglyphEnrichItem>>>& Chunks,
+		int32 ChunkIndex,
+		const TSharedRef<FJsonObject>& Aggregate,
+		const TSharedRef<TFunction<void(const FPolyglyphResponse&)>>& OnComplete);
 };

@@ -17,6 +17,77 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
+namespace
+{
+	/** The backend rejects request bodies over ~1 MB, so chunks flush well before that to leave
+	 *  headroom for JSON overhead and string escaping. */
+	constexpr int32 GPolyglyphChunkByteBudget = 400 * 1024;
+
+	/** The backend also caps one /enrich request at this many items. */
+	constexpr int32 GPolyglyphEnrichMaxItems = 5000;
+
+	/** Split items into chunks that stay under the byte budget and (when InMaxItems > 0) the item
+	 *  cap. Estimate must approximate one item's serialised size in bytes. */
+	template <typename ItemType, typename EstimateType>
+	TArray<TArray<ItemType>> ChunkForTransport(
+		const TArray<ItemType>& InItems, int32 InMaxItems, EstimateType InEstimate)
+	{
+		TArray<TArray<ItemType>> Chunks;
+		TArray<ItemType> Current;
+		int32 CurrentBytes = 0;
+
+		for (const ItemType& Item : InItems)
+		{
+			const int32 ItemBytes = InEstimate(Item);
+			const bool bOverBytes = Current.Num() > 0 && (CurrentBytes + ItemBytes) > GPolyglyphChunkByteBudget;
+			const bool bOverCount = InMaxItems > 0 && Current.Num() >= InMaxItems;
+			if (bOverBytes || bOverCount)
+			{
+				Chunks.Add(MoveTemp(Current));
+				Current.Reset();
+				CurrentBytes = 0;
+			}
+			Current.Add(Item);
+			CurrentBytes += ItemBytes;
+		}
+
+		if (Current.Num() > 0)
+		{
+			Chunks.Add(MoveTemp(Current));
+		}
+		return Chunks;
+	}
+
+	/** Rough serialised size of one source string (field text plus JSON key/quote overhead). */
+	int32 EstimatePushItemBytes(const FPolyglyphSourceString& InString)
+	{
+		return InString.Namespace.Len() + InString.Key.Len() + InString.SourceText.Len()
+			+ InString.Context.Len() + InString.Format.Len() + 80;
+	}
+
+	/** Rough serialised size of one enrich item (field text plus JSON key/quote overhead). */
+	int32 EstimateEnrichItemBytes(const FPolyglyphEnrichItem& InItem)
+	{
+		return InItem.Namespace.Len() + InItem.Key.Len() + InItem.Character.Len()
+			+ InItem.Gender.Len() + InItem.Register.Len() + InItem.Context.Len() + 100;
+	}
+
+	/** Immediate all-zero success for an empty batch, so callers never hit the server's
+	 *  non-empty-array validation with a benign no-op. */
+	FPolyglyphResponse MakeEmptyBatchResponse()
+	{
+		FPolyglyphResponse Response;
+		Response.bSuccess = true;
+		Response.StatusCode = 200;
+		Response.Json = MakeShared<FJsonObject>();
+		Response.Json->SetNumberField(TEXT("created"), 0);
+		Response.Json->SetNumberField(TEXT("updated"), 0);
+		Response.Json->SetNumberField(TEXT("total"), 0);
+		Response.Json->SetArrayField(TEXT("unmatched"), TArray<TSharedPtr<FJsonValue>>());
+		return Response;
+	}
+}
+
 TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> FPolyglyphClient::MakeRequest(
 	const FString& Verb,
 	const FString& Path,
@@ -110,6 +181,33 @@ void FPolyglyphClient::PushStrings(
 	const TArray<FPolyglyphSourceString>& Strings,
 	TFunction<void(const FPolyglyphResponse&)> OnComplete)
 {
+	if (Strings.Num() == 0)
+	{
+		OnComplete(MakeEmptyBatchResponse());
+		return;
+	}
+
+	// One request per chunk, chained sequentially; the shared state survives the async callbacks
+	// (all on the game thread, so plain counters are safe).
+	const TSharedRef<TArray<TArray<FPolyglyphSourceString>>> Chunks =
+		MakeShared<TArray<TArray<FPolyglyphSourceString>>>(
+			ChunkForTransport(Strings, 0, &EstimatePushItemBytes));
+	const TSharedRef<FJsonObject> Aggregate = MakeShared<FJsonObject>();
+	Aggregate->SetNumberField(TEXT("created"), 0);
+	Aggregate->SetNumberField(TEXT("updated"), 0);
+	Aggregate->SetNumberField(TEXT("total"), 0);
+	const TSharedRef<TFunction<void(const FPolyglyphResponse&)>> Done =
+		MakeShared<TFunction<void(const FPolyglyphResponse&)>>(MoveTemp(OnComplete));
+
+	SendPushChunk(Chunks, 0, Aggregate, Done);
+}
+
+void FPolyglyphClient::SendPushChunk(
+	const TSharedRef<TArray<TArray<FPolyglyphSourceString>>>& Chunks,
+	int32 ChunkIndex,
+	const TSharedRef<FJsonObject>& Aggregate,
+	const TSharedRef<TFunction<void(const FPolyglyphResponse&)>>& OnComplete)
+{
 	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
 
 	FString Error;
@@ -119,12 +217,12 @@ void FPolyglyphClient::PushStrings(
 	{
 		FPolyglyphResponse Result;
 		Result.Error = Error;
-		OnComplete(Result);
+		(*OnComplete)(Result);
 		return;
 	}
 
 	TArray<TSharedPtr<FJsonValue>> Items;
-	for (const FPolyglyphSourceString& String : Strings)
+	for (const FPolyglyphSourceString& String : (*Chunks)[ChunkIndex])
 	{
 		const TSharedRef<FJsonObject> Item = MakeShared<FJsonObject>();
 		Item->SetStringField(TEXT("namespace"), String.Namespace);
@@ -152,7 +250,44 @@ void FPolyglyphClient::PushStrings(
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	Request->SetContentAsString(Body);
 
-	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+	Send(Request.ToSharedRef(),
+		[Chunks, ChunkIndex, Aggregate, OnComplete](const FPolyglyphResponse& Response)
+		{
+			if (!Response.bSuccess)
+			{
+				// Earlier chunks already upserted server-side; push is idempotent, so the caller
+				// can simply push again after fixing the cause.
+				FPolyglyphResponse Result = Response;
+				const int32 Upserted = static_cast<int32>(Aggregate->GetNumberField(TEXT("total")));
+				Result.Error = FString::Printf(
+					TEXT("Push request %d of %d failed after upserting %d string(s): %s"),
+					ChunkIndex + 1, Chunks->Num(), Upserted, *Response.Error);
+				(*OnComplete)(Result);
+				return;
+			}
+
+			if (Response.Json.IsValid())
+			{
+				for (const TCHAR* Field : { TEXT("created"), TEXT("updated"), TEXT("total") })
+				{
+					double Value = 0.0;
+					if (Response.Json->TryGetNumberField(Field, Value))
+					{
+						Aggregate->SetNumberField(Field, Aggregate->GetNumberField(Field) + Value);
+					}
+				}
+			}
+
+			if (ChunkIndex + 1 < Chunks->Num())
+			{
+				SendPushChunk(Chunks, ChunkIndex + 1, Aggregate, OnComplete);
+				return;
+			}
+
+			FPolyglyphResponse Result = Response;
+			Result.Json = Aggregate;
+			(*OnComplete)(Result);
+		});
 }
 
 void FPolyglyphClient::PullTranslations(
@@ -287,6 +422,33 @@ void FPolyglyphClient::EnrichStrings(
 	const TArray<FPolyglyphEnrichItem>& Items,
 	TFunction<void(const FPolyglyphResponse&)> OnComplete)
 {
+	if (Items.Num() == 0)
+	{
+		OnComplete(MakeEmptyBatchResponse());
+		return;
+	}
+
+	// One request per chunk (the server caps both the item count and the body size), chained
+	// sequentially with the results merged into one aggregated response.
+	const TSharedRef<TArray<TArray<FPolyglyphEnrichItem>>> Chunks =
+		MakeShared<TArray<TArray<FPolyglyphEnrichItem>>>(
+			ChunkForTransport(Items, GPolyglyphEnrichMaxItems, &EstimateEnrichItemBytes));
+	const TSharedRef<FJsonObject> Aggregate = MakeShared<FJsonObject>();
+	Aggregate->SetNumberField(TEXT("updated"), 0);
+	Aggregate->SetNumberField(TEXT("total"), 0);
+	Aggregate->SetArrayField(TEXT("unmatched"), TArray<TSharedPtr<FJsonValue>>());
+	const TSharedRef<TFunction<void(const FPolyglyphResponse&)>> Done =
+		MakeShared<TFunction<void(const FPolyglyphResponse&)>>(MoveTemp(OnComplete));
+
+	SendEnrichChunk(Chunks, 0, Aggregate, Done);
+}
+
+void FPolyglyphClient::SendEnrichChunk(
+	const TSharedRef<TArray<TArray<FPolyglyphEnrichItem>>>& Chunks,
+	int32 ChunkIndex,
+	const TSharedRef<FJsonObject>& Aggregate,
+	const TSharedRef<TFunction<void(const FPolyglyphResponse&)>>& OnComplete)
+{
 	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
 
 	FString Error;
@@ -296,12 +458,12 @@ void FPolyglyphClient::EnrichStrings(
 	{
 		FPolyglyphResponse Result;
 		Result.Error = Error;
-		OnComplete(Result);
+		(*OnComplete)(Result);
 		return;
 	}
 
 	TArray<TSharedPtr<FJsonValue>> ItemValues;
-	for (const FPolyglyphEnrichItem& Item : Items)
+	for (const FPolyglyphEnrichItem& Item : (*Chunks)[ChunkIndex])
 	{
 		const TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
 		Object->SetStringField(TEXT("namespace"), Item.Namespace);
@@ -340,7 +502,53 @@ void FPolyglyphClient::EnrichStrings(
 	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	Request->SetContentAsString(Body);
 
-	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+	Send(Request.ToSharedRef(),
+		[Chunks, ChunkIndex, Aggregate, OnComplete](const FPolyglyphResponse& Response)
+		{
+			if (!Response.bSuccess)
+			{
+				// Earlier chunks already bound server-side; report progress so a partial run
+				// is not mistaken for a no-op.
+				FPolyglyphResponse Result = Response;
+				const int32 Bound = static_cast<int32>(Aggregate->GetNumberField(TEXT("updated")));
+				Result.Error = Bound > 0
+					? FString::Printf(TEXT("Enrich request %d of %d failed after binding %d key(s): %s"),
+						ChunkIndex + 1, Chunks->Num(), Bound, *Response.Error)
+					: Response.Error;
+				(*OnComplete)(Result);
+				return;
+			}
+
+			if (Response.Json.IsValid())
+			{
+				for (const TCHAR* Field : { TEXT("updated"), TEXT("total") })
+				{
+					double Value = 0.0;
+					if (Response.Json->TryGetNumberField(Field, Value))
+					{
+						Aggregate->SetNumberField(Field, Aggregate->GetNumberField(Field) + Value);
+					}
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>* ChunkUnmatched = nullptr;
+				if (Response.Json->TryGetArrayField(TEXT("unmatched"), ChunkUnmatched) && ChunkUnmatched != nullptr)
+				{
+					TArray<TSharedPtr<FJsonValue>> Merged = Aggregate->GetArrayField(TEXT("unmatched"));
+					Merged.Append(*ChunkUnmatched);
+					Aggregate->SetArrayField(TEXT("unmatched"), Merged);
+				}
+			}
+
+			if (ChunkIndex + 1 < Chunks->Num())
+			{
+				SendEnrichChunk(Chunks, ChunkIndex + 1, Aggregate, OnComplete);
+				return;
+			}
+
+			FPolyglyphResponse Result = Response;
+			Result.Json = Aggregate;
+			(*OnComplete)(Result);
+		});
 }
 
 void FPolyglyphClient::PumpHttp(const bool& bDone, double TimeoutSeconds)

@@ -12,48 +12,69 @@
 
 namespace
 {
+	/** Split one CSV line into cells. Cells may be double-quoted to carry commas; inside a quoted
+	 *  cell, "" is a literal quote. Quotes elsewhere in an unquoted cell are kept as-is. */
+	TArray<FString> ParseCsvLine(const FString& InLine)
+	{
+		TArray<FString> Cells;
+		FString Current;
+		bool bInQuotes = false;
+
+		for (int32 CharIndex = 0; CharIndex < InLine.Len(); ++CharIndex)
+		{
+			const TCHAR Char = InLine[CharIndex];
+			if (bInQuotes)
+			{
+				if (Char == TEXT('"'))
+				{
+					if (CharIndex + 1 < InLine.Len() && InLine[CharIndex + 1] == TEXT('"'))
+					{
+						Current.AppendChar(TEXT('"'));
+						++CharIndex;
+					}
+					else
+					{
+						bInQuotes = false;
+					}
+				}
+				else
+				{
+					Current.AppendChar(Char);
+				}
+			}
+			else if (Char == TEXT('"') && Current.IsEmpty())
+			{
+				bInQuotes = true;
+			}
+			else if (Char == TEXT(','))
+			{
+				Cells.Add(MoveTemp(Current));
+				Current.Reset();
+			}
+			else
+			{
+				Current.AppendChar(Char);
+			}
+		}
+
+		Cells.Add(MoveTemp(Current));
+		return Cells;
+	}
+
 	/** Read a cell if present, trimmed of surrounding whitespace. */
 	FString Cell(const TArray<FString>& InCells, int32 InIndex)
 	{
 		return InCells.IsValidIndex(InIndex) ? InCells[InIndex].TrimStartAndEnd() : FString();
 	}
 
-	/** The server caps /api/plugin/enrich at 5000 items per request, so a larger binding-map is
-	 *  sent as sequential chunks of this size. */
-	constexpr int32 GEnrichChunkSize = 5000;
-
-	/** Running totals across all chunks of one enrich push. */
-	struct FEnrichAggregate
+	/** Collect the "namespace/key" pairs of an aggregated /enrich response's unmatched array. */
+	TArray<FString> CollectUnmatched(const TSharedPtr<FJsonObject>& InJson)
 	{
-		/** Items sent, summed over chunks. */
-		int32 Total = 0;
-
-		/** Keys that received at least one metadata change, summed over chunks. */
-		int32 Updated = 0;
-
-		/** "namespace/key" pairs that matched no existing key (need a push first). */
 		TArray<FString> Unmatched;
-	};
-
-	/** Fold one /enrich response body ({ updated, unmatched, total }) into the running totals. */
-	void AccumulateEnrich(const TSharedPtr<FJsonObject>& InJson, FEnrichAggregate& InOutAggregate)
-	{
-		if (!InJson.IsValid())
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		if (InJson.IsValid() && InJson->TryGetArrayField(TEXT("unmatched"), Values) && Values != nullptr)
 		{
-			return;
-		}
-
-		int32 Total = 0;
-		int32 Updated = 0;
-		InJson->TryGetNumberField(TEXT("total"), Total);
-		InJson->TryGetNumberField(TEXT("updated"), Updated);
-		InOutAggregate.Total += Total;
-		InOutAggregate.Updated += Updated;
-
-		const TArray<TSharedPtr<FJsonValue>>* UnmatchedValues = nullptr;
-		if (InJson->TryGetArrayField(TEXT("unmatched"), UnmatchedValues) && UnmatchedValues != nullptr)
-		{
-			for (const TSharedPtr<FJsonValue>& Value : *UnmatchedValues)
+			for (const TSharedPtr<FJsonValue>& Value : *Values)
 			{
 				const TSharedPtr<FJsonObject> Object = Value->AsObject();
 				if (Object.IsValid())
@@ -61,77 +82,44 @@ namespace
 					FString Namespace, Key;
 					Object->TryGetStringField(TEXT("namespace"), Namespace);
 					Object->TryGetStringField(TEXT("key"), Key);
-					InOutAggregate.Unmatched.Add(FString::Printf(TEXT("%s/%s"), *Namespace, *Key));
+					Unmatched.Add(FString::Printf(TEXT("%s/%s"), *Namespace, *Key));
 				}
 			}
 		}
+		return Unmatched;
 	}
 
-	/** Build the final human-readable summary. Enrich only binds keys that already exist, so any
-	 *  unmatched (namespace, key) pairs are keys that were not pushed yet; they are listed (capped)
-	 *  so the caller knows to push them first. */
-	FString SummariseAggregate(const FEnrichAggregate& InAggregate)
+	/** Build the human-readable summary. Enrich only binds keys that already exist, so unmatched
+	 *  (namespace, key) pairs are keys not pushed yet; list a capped sample so the caller knows
+	 *  what to push first without flooding the log. */
+	FString SummariseEnrich(const TSharedPtr<FJsonObject>& InJson, const TArray<FString>& InUnmatched)
 	{
-		FString Summary = FString::Printf(
-			TEXT("Enrich complete: bound %d key(s) from %d item(s)."),
-			InAggregate.Updated, InAggregate.Total);
-
-		if (InAggregate.Unmatched.Num() > 0)
+		int32 Total = 0;
+		int32 Updated = 0;
+		if (InJson.IsValid())
 		{
-			// List a handful so the log stays readable; the count tells the full story.
+			InJson->TryGetNumberField(TEXT("total"), Total);
+			InJson->TryGetNumberField(TEXT("updated"), Updated);
+		}
+
+		FString Summary = FString::Printf(
+			TEXT("Enrich complete: bound %d key(s) from %d item(s)."), Updated, Total);
+
+		if (InUnmatched.Num() > 0)
+		{
 			const int32 ShowMax = 10;
-			const TArray<FString> Shown(
-				InAggregate.Unmatched.GetData(), FMath::Min(InAggregate.Unmatched.Num(), ShowMax));
+			const TArray<FString> Shown(InUnmatched.GetData(), FMath::Min(InUnmatched.Num(), ShowMax));
 			FString List = FString::Join(Shown, TEXT(", "));
-			if (InAggregate.Unmatched.Num() > ShowMax)
+			if (InUnmatched.Num() > ShowMax)
 			{
-				List += FString::Printf(TEXT(", and %d more"), InAggregate.Unmatched.Num() - ShowMax);
+				List += FString::Printf(TEXT(", and %d more"), InUnmatched.Num() - ShowMax);
 			}
 			Summary += FString::Printf(
 				TEXT(" %d not in the project yet (push these keys first): %s"),
-				InAggregate.Unmatched.Num(), *List);
+				InUnmatched.Num(), *List);
 		}
 
 		return Summary;
-	}
-
-	/** Send the chunk starting at InStart, then recurse to the next chunk on success. All state is
-	 *  shared so it survives the async callbacks (which fire on the game thread, so no atomics). */
-	void SendEnrichChunk(
-		const TSharedRef<TArray<FPolyglyphEnrichItem>>& InItems,
-		int32 InStart,
-		const TSharedRef<FEnrichAggregate>& InAggregate,
-		const TSharedRef<TFunction<void(bool, const FString&)>>& InDone)
-	{
-		const int32 ChunkCount = FMath::Min(GEnrichChunkSize, InItems->Num() - InStart);
-		const TArray<FPolyglyphEnrichItem> Chunk(InItems->GetData() + InStart, ChunkCount);
-
-		FPolyglyphClient::EnrichStrings(Chunk,
-			[InItems, InStart, InAggregate, InDone](const FPolyglyphResponse& Response)
-			{
-				if (!Response.bSuccess)
-				{
-					// Earlier chunks already committed server-side; say how many bound before the failure.
-					const FString Message = InAggregate->Updated > 0
-						? FString::Printf(TEXT("Enrich failed after binding %d key(s): %s"),
-							InAggregate->Updated, *Response.Error)
-						: FString::Printf(TEXT("Enrich failed: %s"), *Response.Error);
-					(*InDone)(false, Message);
-					return;
-				}
-
-				AccumulateEnrich(Response.Json, *InAggregate);
-
-				const int32 Next = InStart + GEnrichChunkSize;
-				if (Next < InItems->Num())
-				{
-					SendEnrichChunk(InItems, Next, InAggregate, InDone);
-				}
-				else
-				{
-					(*InDone)(true, SummariseAggregate(*InAggregate));
-				}
-			});
 	}
 }
 
@@ -162,8 +150,7 @@ bool FPolyglyphEnrich::BuildFromCsv(const FString& InCsvPath, TArray<FPolyglyphE
 			continue;
 		}
 
-		TArray<FString> Cells;
-		Line.ParseIntoArray(Cells, TEXT(","), false);
+		const TArray<FString> Cells = ParseCsvLine(Line);
 
 		FPolyglyphEnrichItem Item;
 		Item.Namespace = Cell(Cells, 0);
@@ -198,20 +185,26 @@ bool FPolyglyphEnrich::BuildFromCsv(const FString& InCsvPath, TArray<FPolyglyphE
 	return true;
 }
 
-void FPolyglyphEnrich::Push(const TArray<FPolyglyphEnrichItem>& InItems, TFunction<void(bool, const FString&)> OnDone)
+void FPolyglyphEnrich::Push(
+	const TArray<FPolyglyphEnrichItem>& InItems,
+	TFunction<void(bool, const FString&, int32)> OnDone)
 {
 	if (InItems.Num() == 0)
 	{
-		OnDone(false, TEXT("No enrichment items to send."));
+		OnDone(false, TEXT("No enrichment items to send."), 0);
 		return;
 	}
 
-	// Send in sequential chunks (the server caps one request at GEnrichChunkSize). Shared storage
-	// keeps the items and running totals alive across the async chunk callbacks.
-	const TSharedRef<TArray<FPolyglyphEnrichItem>> Items = MakeShared<TArray<FPolyglyphEnrichItem>>(InItems);
-	const TSharedRef<FEnrichAggregate> Aggregate = MakeShared<FEnrichAggregate>();
-	const TSharedRef<TFunction<void(bool, const FString&)>> Done =
-		MakeShared<TFunction<void(bool, const FString&)>>(MoveTemp(OnDone));
+	FPolyglyphClient::EnrichStrings(InItems,
+		[Done = MoveTemp(OnDone)](const FPolyglyphResponse& Response)
+		{
+			if (!Response.bSuccess)
+			{
+				Done(false, FString::Printf(TEXT("Enrich failed: %s"), *Response.Error), 0);
+				return;
+			}
 
-	SendEnrichChunk(Items, 0, Aggregate, Done);
+			const TArray<FString> Unmatched = CollectUnmatched(Response.Json);
+			Done(true, SummariseEnrich(Response.Json, Unmatched), Unmatched.Num());
+		});
 }

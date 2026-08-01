@@ -82,10 +82,15 @@ bool FPolyglyphArchive::ImportTranslations(
 			continue;
 		}
 
+		// ImportTranslation updates the existing (empty) entry the gather pre-created, or adds a
+		// new one; AddTranslation would be rejected as a duplicate and drop the value silently.
 		const FLocItem Source(*SourceText);
 		const FLocItem Translated(Translation.Value);
-		LocTextHelper.AddTranslation(Culture, Translation.Namespace, Translation.Key, nullptr, Source, Translated, false);
-		++Applied;
+		if (LocTextHelper.ImportTranslation(
+			Culture, Translation.Namespace, Translation.Key, nullptr, Source, Translated, false))
+		{
+			++Applied;
+		}
 	}
 
 	if (!LocTextHelper.SaveArchive(Culture, &LoadError))
@@ -111,13 +116,16 @@ bool FPolyglyphArchive::CompileCulture(const FString& Culture, FString& OutError
 	const FString ArchiveName = TargetName + TEXT(".archive");
 	const FString ResourceName = TargetName + TEXT(".locres");
 
+	// GenerateLocRes consults the native culture's archive while resolving translations, so load
+	// it alongside the culture being compiled (they are the same archive when compiling "en").
 	TArray<FString> Cultures;
-	Cultures.Add(Culture);
+	Cultures.Add(TEXT("en"));
+	Cultures.AddUnique(Culture);
 	FLocTextHelper LocTextHelper(TargetPath, ManifestName, ArchiveName, TEXT("en"), Cultures, nullptr);
 
 	FText LoadError;
 	if (!LocTextHelper.LoadManifest(ELocTextHelperLoadFlags::Load, &LoadError)
-		|| !LocTextHelper.LoadArchive(Culture, ELocTextHelperLoadFlags::Load, &LoadError))
+		|| !LocTextHelper.LoadAllArchives(ELocTextHelperLoadFlags::Load, &LoadError))
 	{
 		OutError = LoadError.ToString();
 		return false;

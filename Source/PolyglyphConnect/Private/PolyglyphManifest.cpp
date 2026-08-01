@@ -29,9 +29,11 @@ bool FPolyglyphManifest::GatherSourceStrings(TArray<FPolyglyphSourceString>& Out
 		return false;
 	}
 
-	// Read the source side of the target only; cultures/archives are not needed for a push.
+	// Read the source side of the target only; no archives are loaded for a push, but the helper
+	// asserts on an empty archive name, so pass the target's real one.
 	const TArray<FString> NoCultures;
-	FLocTextHelper LocTextHelper(TargetPath, ManifestName, FString(), TEXT("en"), NoCultures, nullptr);
+	FLocTextHelper LocTextHelper(
+		TargetPath, ManifestName, TargetName + TEXT(".archive"), TEXT("en"), NoCultures, nullptr);
 
 	FText LoadError;
 	if (!LocTextHelper.LoadManifest(ELocTextHelperLoadFlags::Load, &LoadError))
