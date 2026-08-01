@@ -78,8 +78,9 @@ private:
 	ELocalizationServiceOperationCommandResult::Type ExecuteDownload(
 		const TSharedRef<ILocalizationServiceOperation, ESPMode::ThreadSafe>& InOperation) const;
 
-	/** Synchronous FUploadLocalizationTargetFile: push source strings from the target manifest.
-	 *  Polyglyph owns translations, so upload sends source only (the culture PO is ignored). */
+	/** Synchronous FUploadLocalizationTargetFile: always fails with an explanation. The caller
+	 *  (the Translation Editor) is trying to upload edited translations, which Polyglyph owns and
+	 *  the next pull would overwrite; source text goes up via Push Source instead. */
 	ELocalizationServiceOperationCommandResult::Type ExecuteUpload(
 		const TSharedRef<ILocalizationServiceOperation, ESPMode::ThreadSafe>& InOperation) const;
 

@@ -90,9 +90,11 @@ ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServicePr
 	TArray<TSharedRef<ILocalizationServiceState, ESPMode::ThreadSafe>>& OutState,
 	ELocalizationServiceCacheUsage::Type InStateCacheUsage)
 {
-	// No per-string state cache: Polyglyph tracks review/approval in its own dashboard.
+	// No per-string state cache: Polyglyph tracks review/approval in its own dashboard. Report
+	// failure rather than an empty success, because the interface's single-state helper indexes
+	// OutState[0] whenever this returns Succeeded.
 	OutState.Reset();
-	return ELocalizationServiceOperationCommandResult::Succeeded;
+	return ELocalizationServiceOperationCommandResult::Failed;
 }
 
 ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServiceProvider::Execute(
@@ -336,35 +338,19 @@ ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServicePr
 ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServiceProvider::ExecuteUpload(
 	const TSharedRef<ILocalizationServiceOperation, ESPMode::ThreadSafe>& InOperation) const
 {
+	// The only caller is the Translation Editor's "save translations to the localization service",
+	// which hands us a culture's edited TRANSLATIONS. Polyglyph owns translations (they are drafted,
+	// reviewed and approved there, and the next pull overwrites the archive), so there is nothing
+	// honest to do with them. Refuse with an explanation instead of silently pushing source strings
+	// and reporting success, which would look like the edits were saved.
 	const TSharedRef<FUploadLocalizationTargetFile, ESPMode::ThreadSafe> Operation =
 		StaticCastSharedRef<FUploadLocalizationTargetFile>(InOperation);
 
-	TArray<FPolyglyphSourceString> Strings;
-	FString GatherError;
-	if (!FPolyglyphManifest::GatherSourceStrings(Strings, GatherError))
-	{
-		Operation->SetOutErrorText(FText::FromString(GatherError));
-		return ELocalizationServiceOperationCommandResult::Failed;
-	}
-
-	bool bDone = false;
-	bool bOk = false;
-	FString Error;
-	FPolyglyphClient::PushStrings(Strings, [&bDone, &bOk, &Error](const FPolyglyphResponse& Response)
-	{
-		bOk = Response.bSuccess;
-		Error = Response.Error;
-		bDone = true;
-	});
-	FPolyglyphClient::PumpHttp(bDone, 300.0);
-
-	if (!bOk)
-	{
-		Operation->SetOutErrorText(FText::FromString(Error));
-		return ELocalizationServiceOperationCommandResult::Failed;
-	}
-
-	return ELocalizationServiceOperationCommandResult::Succeeded;
+	Operation->SetOutErrorText(LOCTEXT("PolyglyphUploadUnsupported",
+		"Polyglyph owns translations: edit and approve them in the Polyglyph dashboard, then use "
+		"Pull Approved. Uploading translations from the Translation Editor is not supported, "
+		"because the next pull would overwrite them. Use Push Source to send source text."));
+	return ELocalizationServiceOperationCommandResult::Failed;
 }
 
 #undef LOCTEXT_NAMESPACE
