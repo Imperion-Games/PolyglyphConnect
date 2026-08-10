@@ -21,9 +21,9 @@
 #include "PolyglyphArchive.h"
 #include "PolyglyphClient.h"
 #include "PolyglyphLocaleMapping.h"
-#include "PolyglyphManifest.h"
 #include "PolyglyphProjectSettings.h"
 #include "PolyglyphPull.h"
+#include "PolyglyphPush.h"
 #include "PolyglyphSettings.h"
 #include "PolyglyphTranslate.h"
 #include "PolyglyphTypes.h"
@@ -298,25 +298,9 @@ void FPolyglyphLocalizationServiceProvider::PushSourceForTarget(TWeakObjectPtr<U
 		return;
 	}
 
-	TArray<FPolyglyphSourceString> Strings;
-	FString GatherError;
-	if (!FPolyglyphManifest::GatherSourceStrings(Strings, GatherError))
+	FPolyglyphPush::Run([](bool InSuccess, const FString& InSummary)
 	{
-		Notify(GatherError, false);
-		return;
-	}
-
-	const int32 Count = Strings.Num();
-	FPolyglyphClient::PushStrings(Strings, [Count](const FPolyglyphResponse& Response)
-	{
-		if (Response.bSuccess)
-		{
-			Notify(FString::Printf(TEXT("Pushed %d source string(s) to Polyglyph."), Count), true);
-		}
-		else
-		{
-			Notify(FString::Printf(TEXT("Push failed: %s"), *Response.Error), false);
-		}
+		Notify(InSummary, InSuccess);
 	});
 }
 

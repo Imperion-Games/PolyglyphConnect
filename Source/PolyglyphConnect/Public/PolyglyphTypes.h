@@ -85,7 +85,7 @@ struct FPolyglyphPullResult
 
 /**
  * One enrichment record attaching translator-context metadata to an existing key (mirrors a
- * planned POST /api/plugin/enrich item). Character voice, grammatical gender, register, and a
+ * POST /api/plugin/enrich item). Character voice, grammatical gender, register, and a
  * max display length all ride this single channel, keyed by namespace + key.
  */
 struct FPolyglyphEnrichItem

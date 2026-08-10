@@ -9,9 +9,9 @@
 #include "Misc/Parse.h"
 
 #include "PolyglyphClient.h"
-#include "PolyglyphManifest.h"
 #include "PolyglyphProjectSettings.h"
 #include "PolyglyphPull.h"
+#include "PolyglyphPush.h"
 #include "PolyglyphSettings.h"
 #include "PolyglyphTranslate.h"
 #include "PolyglyphTypes.h"
@@ -93,31 +93,24 @@ namespace
 	/** Gather the manifest and push it. Returns 0 on success, 1 on failure. */
 	int32 RunPush()
 	{
-		TArray<FPolyglyphSourceString> Strings;
-		FString GatherError;
-		if (!FPolyglyphManifest::GatherSourceStrings(Strings, GatherError))
-		{
-			UE_LOG(LogPolyglyphSync, Error, TEXT("Push aborted: %s"), *GatherError);
-			return 1;
-		}
-
 		bool Completed = false;
 		bool Succeeded = false;
 		FString Message;
-		FPolyglyphClient::PushStrings(Strings, [&Completed, &Succeeded, &Message](const FPolyglyphResponse& Response)
+		FPolyglyphPush::Run([&Completed, &Succeeded, &Message](bool InSuccess, const FString& InMessage)
 		{
-			Succeeded = Response.bSuccess;
-			Message = Response.Error;
+			Succeeded = InSuccess;
+			Message = InMessage;
 			Completed = true;
 		});
 		PumpUntil(Completed, 300.0);
 
 		if (Succeeded)
 		{
-			UE_LOG(LogPolyglyphSync, Display, TEXT("Pushed %d source string(s)."), Strings.Num());
+			UE_LOG(LogPolyglyphSync, Display, TEXT("%s"), *Message);
 			return 0;
 		}
-		UE_LOG(LogPolyglyphSync, Error, TEXT("Push failed: %s"), *Message);
+
+		UE_LOG(LogPolyglyphSync, Error, TEXT("%s"), *Message);
 		return 1;
 	}
 

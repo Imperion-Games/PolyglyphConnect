@@ -8,9 +8,8 @@ struct FPolyglyphEnrichItem;
 
 /**
  * Builds and sends key-enrichment metadata (character voice, gender, register, max length,
- * context) to Polyglyph. This is the manual/customized feed that the flattened manifest cannot
- * carry: a studio maps keys to speakers in a binding-map CSV, and this pushes them to the
- * POST /api/plugin/enrich endpoint. The counterpart to the source-string push.
+ * context) to Polyglyph. Native DialogueWave metadata and manual binding-map CSV imports both
+ * feed this single POST /api/plugin/enrich channel.
  */
 class FPolyglyphEnrich
 {
