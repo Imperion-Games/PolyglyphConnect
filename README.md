@@ -78,3 +78,10 @@ To regenerate the complete catalog for a new engine version, run:
 ```text
 UnrealEditor-Cmd.exe <Project>.uproject -run=PolyglyphLocaleMap -Output=<path-to-json>
 ```
+
+## License
+
+PolyForm Internal Use License 1.0.0, see [LICENSE.md](LICENSE.md). In short: use and
+modify it freely inside your own studio, for your own projects. You may not
+redistribute it, sublicense it, or resell it, modified or not, to anyone outside your
+company.
