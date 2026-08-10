@@ -36,9 +36,12 @@ Early scaffold. What exists:
 
 1. Enable the plugin for your project (Plugins browser, or add it to the `.uproject`).
 2. In the Polyglyph dashboard, create an API key and note your project slug.
-3. `Edit > Editor Preferences > Plugins > Polyglyph`: set the API base URL, project
-   slug, and paste your API key.
-4. `Tools > Polyglyph > Test Connection` to confirm the link.
+3. `Edit > Project Settings > Plugins > Polyglyph`: set the API base URL, project
+   slug, and (if you use a non-default target) the localization target name. These are
+   shared, project-wide settings committed to source control.
+4. `Edit > Editor Preferences > Plugins > Polyglyph`: paste your API key. This is a
+   per-user setting stored outside the project and never committed.
+5. `Tools > Polyglyph > Test Connection` to confirm the link.
 
 Design notes, the full endpoint map, and the build-out plan live in the Brain:
 `Knowledge/Brain/Plugins/PolyglyphConnect/`.

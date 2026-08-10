@@ -32,6 +32,39 @@
 
 namespace
 {
+	/**
+	 * Derive the Polyglyph dashboard URL from the configured API base URL, e.g.
+	 * https://api.polyglyph.app -> https://polyglyph.app. BaseUrl is documented as the API host
+	 * (UPolyglyphProjectSettings::BaseUrl) and is not where a human wants to land when they click
+	 * "Open in Polyglyph". Returns InBaseUrl unchanged when it carries no "api." host label to
+	 * strip, such as a local development URL, since there is nothing safe to derive there.
+	 */
+	FString DashboardUrlFromApiBase(const FString& InBaseUrl)
+	{
+		FString Scheme;
+		FString Remainder;
+		if (!InBaseUrl.Split(TEXT("://"), &Scheme, &Remainder))
+		{
+			return InBaseUrl;
+		}
+
+		int32 PathIndex = INDEX_NONE;
+		FString Host = Remainder.FindChar(TEXT('/'), PathIndex) ? Remainder.Left(PathIndex) : Remainder;
+
+		int32 PortIndex = INDEX_NONE;
+		if (Host.FindChar(TEXT(':'), PortIndex))
+		{
+			Host = Host.Left(PortIndex);
+		}
+
+		if (!Host.StartsWith(TEXT("api."), ESearchCase::IgnoreCase))
+		{
+			return InBaseUrl;
+		}
+
+		return Scheme + TEXT("://") + Host.RightChop(4);
+	}
+
 	/** Raise a fire-and-forget editor notification for a completed Polyglyph action. */
 	void Notify(const FString& InMessage, bool InSuccess)
 	{
@@ -350,7 +383,7 @@ void FPolyglyphLocalizationServiceProvider::OpenInPolyglyph() const
 		return;
 	}
 
-	FPlatformProcess::LaunchURL(*Project->BaseUrl, nullptr, nullptr);
+	FPlatformProcess::LaunchURL(*DashboardUrlFromApiBase(Project->BaseUrl), nullptr, nullptr);
 }
 
 ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServiceProvider::ExecuteConnect(
