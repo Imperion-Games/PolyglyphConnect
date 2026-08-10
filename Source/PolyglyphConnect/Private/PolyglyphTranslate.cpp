@@ -8,12 +8,12 @@
 #include "PolyglyphTypes.h"
 
 void FPolyglyphTranslate::Run(
-	const FString& Mode,
-	bool bMock,
+	const FString& InMode,
+	bool Mock,
 	TFunction<void(bool, const FString&, const TArray<FPolyglyphTriggeredJob>&)> OnDone)
 {
 	FPolyglyphClient::TestConnection(
-		[Mode, bMock, Done = MoveTemp(OnDone)](const FPolyglyphResponse& StatusResponse)
+		[InMode, Mock, Done = MoveTemp(OnDone)](const FPolyglyphResponse& StatusResponse)
 		{
 			if (!StatusResponse.bSuccess)
 			{
@@ -22,7 +22,7 @@ void FPolyglyphTranslate::Run(
 			}
 
 			FPolyglyphProjectStatus Status;
-			FPolyglyphProjectStatus::FromJson(StatusResponse.Json, Status);
+			FPolyglyphProjectStatus::ParseStatusResponse(StatusResponse.Json, Status);
 
 			TArray<FString> Cultures;
 			for (const FPolyglyphLanguageStatus& Language : Status.Languages)
@@ -47,7 +47,7 @@ void FPolyglyphTranslate::Run(
 
 			for (const FString& Culture : Cultures)
 			{
-				FPolyglyphClient::TriggerTranslate(Culture, Mode, bMock,
+				FPolyglyphClient::TriggerTranslate(Culture, InMode, Mock,
 					[Culture, Remaining, Jobs, Errors, DonePtr](const FPolyglyphResponse& Response)
 					{
 						if (Response.bSuccess && Response.Json.IsValid())
@@ -64,11 +64,11 @@ void FPolyglyphTranslate::Run(
 
 						if (--(*Remaining) == 0)
 						{
-							const bool bOk = Errors->Num() == 0;
-							const FString Summary = bOk
+							const bool Succeeded = Errors->Num() == 0;
+							const FString Summary = Succeeded
 								? FString::Printf(TEXT("Started %d translation job(s)."), Jobs->Num())
 								: FString::Join(*Errors, TEXT("; "));
-							(*DonePtr)(bOk, Summary, *Jobs);
+							(*DonePtr)(Succeeded, Summary, *Jobs);
 						}
 					});
 			}

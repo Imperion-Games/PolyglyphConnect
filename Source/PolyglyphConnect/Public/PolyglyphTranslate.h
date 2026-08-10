@@ -14,11 +14,12 @@ struct FPolyglyphTriggeredJob;
 class FPolyglyphTranslate
 {
 public:
-	/** Trigger a translation job per enabled language. Mode is sync/batch/auto (empty lets
-	 *  the server choose); bMock is a no-cost dry run. OnDone(bSuccess, Summary, Jobs) fires
-	 *  on the game thread once every language has been triggered. */
+	/**
+	 * Trigger a translation job per enabled language.
+	 * Mock is a no-cost dry run; OnDone fires after every language has been triggered.
+	 */
 	static void Run(
-		const FString& Mode,
-		bool bMock,
+		const FString& InMode,
+		bool Mock,
 		TFunction<void(bool, const FString&, const TArray<FPolyglyphTriggeredJob>&)> OnDone);
 };

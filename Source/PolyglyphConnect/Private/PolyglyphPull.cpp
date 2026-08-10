@@ -2,41 +2,84 @@
 
 #include "PolyglyphPull.h"
 
-#include "Dom/JsonObject.h"
-#include "Dom/JsonValue.h"
-
 #include "PolyglyphArchive.h"
 #include "PolyglyphClient.h"
+#include "PolyglyphProjectSettings.h"
 #include "PolyglyphTypes.h"
 
 namespace
 {
-	/** Parse a GET /pull body into translation triples. */
-	TArray<FPolyglyphTranslation> ParseTranslations(const TSharedPtr<FJsonObject>& InJson)
+	/** Shared completion state for asynchronous per-culture pull requests. */
+	struct FPolyglyphPullProgress
 	{
-		TArray<FPolyglyphTranslation> Translations;
-		if (!InJson.IsValid())
+		explicit FPolyglyphPullProgress(
+			int32 InCultureCount,
+			TFunction<void(bool, const FString&)> InDone)
+			: Remaining(InCultureCount)
+			, Imported(0)
+			, Skipped(0)
+			, Failed(0)
+			, Done(MoveTemp(InDone))
 		{
-			return Translations;
 		}
 
-		const TArray<TSharedPtr<FJsonValue>>* Strings = nullptr;
-		if (InJson->TryGetArrayField(TEXT("strings"), Strings) && Strings != nullptr)
+		/** Complete one culture and deliver the aggregate summary after the final callback. */
+		void CompleteCulture()
 		{
-			for (const TSharedPtr<FJsonValue>& Value : *Strings)
+			--Remaining;
+			if (Remaining > 0)
 			{
-				const TSharedPtr<FJsonObject> Object = Value->AsObject();
-				if (Object.IsValid())
-				{
-					FPolyglyphTranslation Translation;
-					Object->TryGetStringField(TEXT("namespace"), Translation.Namespace);
-					Object->TryGetStringField(TEXT("key"), Translation.Key);
-					Object->TryGetStringField(TEXT("value"), Translation.Value);
-					Translations.Add(MoveTemp(Translation));
-				}
+				return;
 			}
+
+			FString Summary = FString::Printf(
+				TEXT("Imported %d culture(s), skipped %d, failed %d."),
+				Imported,
+				Skipped,
+				Failed);
+			if (Imported > 0)
+			{
+				Summary += TEXT(" .locres updated.");
+			}
+			if (Messages.Num() > 0)
+			{
+				Summary += TEXT(" ") + FString::Join(Messages, TEXT("; "));
+			}
+			Done(Failed == 0, Summary);
 		}
-		return Translations;
+
+		int32 Remaining;
+		int32 Imported;
+		int32 Skipped;
+		int32 Failed;
+		TArray<FString> Messages;
+		TFunction<void(bool, const FString&)> Done;
+	};
+
+	/** Describe why a valid pull response contained no importable translations. */
+	FString BuildSkipMessage(
+		const FString& InCulture,
+		const FPolyglyphPullCounts& InCounts,
+		bool IncludeUnapprovedDrafts)
+	{
+		if (!IncludeUnapprovedDrafts && InCounts.NeedsReview > 0 && InCounts.Approved == 0)
+		{
+			return FString::Printf(
+				TEXT("%s: %d translation(s) are waiting for approval in Polyglyph. Approve them, or enable "
+					"Include unapproved drafts."),
+				*InCulture,
+				InCounts.NeedsReview);
+		}
+
+		if (InCounts.Untranslated > 0)
+		{
+			return FString::Printf(
+				TEXT("%s: No translations are available yet; %d source string(s) are untranslated in Polyglyph."),
+				*InCulture,
+				InCounts.Untranslated);
+		}
+
+		return FString::Printf(TEXT("%s: Polyglyph returned no translations for this culture."), *InCulture);
 	}
 }
 
@@ -52,7 +95,7 @@ void FPolyglyphPull::Run(TFunction<void(bool, const FString&)> OnDone)
 			}
 
 			FPolyglyphProjectStatus Status;
-			FPolyglyphProjectStatus::FromJson(StatusResponse.Json, Status);
+			FPolyglyphProjectStatus::ParseStatusResponse(StatusResponse.Json, Status);
 
 			TArray<FString> Cultures;
 			for (const FPolyglyphLanguageStatus& Language : Status.Languages)
@@ -69,46 +112,52 @@ void FPolyglyphPull::Run(TFunction<void(bool, const FString&)> OnDone)
 				return;
 			}
 
-			// Shared across the per-culture callbacks; all fire on the game thread, so the
-			// plain counters are safe without atomics.
-			const TSharedRef<int32> Remaining = MakeShared<int32>(Cultures.Num());
-			const TSharedRef<int32> Imported = MakeShared<int32>(0);
-			const TSharedRef<TArray<FString>> Errors = MakeShared<TArray<FString>>();
-			const TSharedRef<TFunction<void(bool, const FString&)>> DonePtr =
-				MakeShared<TFunction<void(bool, const FString&)>>(Done);
+			const UPolyglyphProjectSettings* const Project = GetDefault<UPolyglyphProjectSettings>();
+			const bool IncludeUnapprovedDrafts = Project->bIncludeUnapprovedDrafts;
+			const TSharedRef<FPolyglyphPullProgress> Progress =
+				MakeShared<FPolyglyphPullProgress>(Cultures.Num(), Done);
 
 			for (const FString& Culture : Cultures)
 			{
-				FPolyglyphClient::PullTranslations(Culture,
-					[Culture, Remaining, Imported, Errors, DonePtr](const FPolyglyphResponse& PullResponse)
+				FPolyglyphClient::PullTranslations(
+					Culture,
+					IncludeUnapprovedDrafts,
+					[Culture, IncludeUnapprovedDrafts, Progress](
+						const FPolyglyphResponse& PullResponse,
+						const FPolyglyphPullResult& PullResult)
 					{
-						if (PullResponse.bSuccess)
+						if (!PullResponse.bSuccess)
 						{
-							const TArray<FPolyglyphTranslation> Translations = ParseTranslations(PullResponse.Json);
-							FString StepError;
-							if (FPolyglyphArchive::ImportTranslations(Culture, Translations, StepError)
-								&& FPolyglyphArchive::CompileCulture(Culture, StepError))
-							{
-								++(*Imported);
-							}
-							else
-							{
-								Errors->Add(FString::Printf(TEXT("%s: %s"), *Culture, *StepError));
-							}
+							++Progress->Failed;
+							Progress->Messages.Add(
+								FString::Printf(TEXT("%s: %s"), *Culture, *PullResponse.Error));
+						}
+						else if (PullResult.Translations.Num() == 0)
+						{
+							++Progress->Skipped;
+							Progress->Messages.Add(
+								BuildSkipMessage(Culture, PullResult.Counts, IncludeUnapprovedDrafts));
 						}
 						else
 						{
-							Errors->Add(FString::Printf(TEXT("%s: %s"), *Culture, *PullResponse.Error));
+							FString StepError;
+							if (FPolyglyphArchive::ImportTranslations(
+								Culture,
+								PullResult.Translations,
+								StepError)
+								&& FPolyglyphArchive::CompileCulture(Culture, StepError))
+							{
+								++Progress->Imported;
+							}
+							else
+							{
+								++Progress->Failed;
+								Progress->Messages.Add(
+									FString::Printf(TEXT("%s: %s"), *Culture, *StepError));
+							}
 						}
 
-						if (--(*Remaining) == 0)
-						{
-							const bool bOk = Errors->Num() == 0;
-							const FString Summary = bOk
-								? FString::Printf(TEXT("Pulled and compiled %d culture(s). .locres updated."), *Imported)
-								: FString::Join(*Errors, TEXT("; "));
-							(*DonePtr)(bOk, Summary);
-						}
+						Progress->CompleteCulture();
 					});
 			}
 		});

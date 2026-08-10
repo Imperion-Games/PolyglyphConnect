@@ -14,7 +14,7 @@ class ULocalizationTargetSet;
 /**
  * Localization service provider that plugs Polyglyph into the native Localization Dashboard.
  *
- * It adds per-target toolbar actions (push source, pull approved, translate, open in Polyglyph)
+ * It adds per-target toolbar actions (push source, pull translations, translate, open in Polyglyph)
  * that reuse the structured push/pull helpers, and implements the standard connect / download /
  * upload operations so the dashboard's own service flows work too. All network calls go through
  * FPolyglyphClient. The module registers one instance under the "LocalizationService" feature.
@@ -53,6 +53,9 @@ public:
 	//~ End ILocalizationServiceProvider Interface
 
 private:
+	/** Defer a Details-panel rebuild until Unreal has completed the current editor action. */
+	void QueueDashboardDetailsRefresh();
+
 	/** Rebuild open Details panels after Polyglyph becomes the active provider. */
 	bool RefreshDashboardDetails(float InDeltaSeconds);
 
@@ -65,8 +68,8 @@ private:
 	/** Toolbar action: gather the target manifest and push its source strings (async). */
 	void PushSourceForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget);
 
-	/** Toolbar action: pull approved translations for every enabled culture, import + compile. */
-	void PullApprovedForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget);
+	/** Toolbar action: pull translations for every enabled culture, import, and compile. */
+	void PullForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget);
 
 	/** Toolbar action: trigger AI translation for every enabled language (fire-and-forget). */
 	void TranslateForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget);
@@ -82,9 +85,10 @@ private:
 	ELocalizationServiceOperationCommandResult::Type ExecuteDownload(
 		const TSharedRef<ILocalizationServiceOperation, ESPMode::ThreadSafe>& InOperation) const;
 
-	/** Synchronous FUploadLocalizationTargetFile: always fails with an explanation. The caller
-	 *  (the Translation Editor) is trying to upload edited translations, which Polyglyph owns and
-	 *  the next pull would overwrite; source text goes up via Push Source instead. */
+	/**
+	 * Synchronous FUploadLocalizationTargetFile that always fails with an explanation.
+	 * The Translation Editor is trying to upload translations that Polyglyph owns.
+	 */
 	ELocalizationServiceOperationCommandResult::Type ExecuteUpload(
 		const TSharedRef<ILocalizationServiceOperation, ESPMode::ThreadSafe>& InOperation) const;
 

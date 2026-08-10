@@ -39,9 +39,9 @@ namespace
 		for (const ItemType& Item : InItems)
 		{
 			const int32 ItemBytes = InEstimate(Item);
-			const bool bOverBytes = Current.Num() > 0 && (CurrentBytes + ItemBytes) > GPolyglyphChunkByteBudget;
-			const bool bOverCount = InMaxItems > 0 && Current.Num() >= InMaxItems;
-			if (bOverBytes || bOverCount)
+			const bool OverBytes = Current.Num() > 0 && (CurrentBytes + ItemBytes) > GPolyglyphChunkByteBudget;
+			const bool OverCount = InMaxItems > 0 && Current.Num() >= InMaxItems;
+			if (OverBytes || OverCount)
 			{
 				Chunks.Add(MoveTemp(Current));
 				Current.Reset();
@@ -88,6 +88,12 @@ namespace
 	}
 }
 
+FPolyglyphResponse::FPolyglyphResponse()
+	: bSuccess(false)
+	, StatusCode(0)
+{
+}
+
 TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> FPolyglyphClient::MakeRequest(
 	const FString& Verb,
 	const FString& Path,
@@ -115,10 +121,10 @@ void FPolyglyphClient::Send(
 	TFunction<void(const FPolyglyphResponse&)> OnComplete)
 {
 	Request->OnProcessRequestComplete().BindLambda(
-		[OnComplete = MoveTemp(OnComplete)](FHttpRequestPtr, FHttpResponsePtr Resp, bool bConnected)
+		[OnComplete = MoveTemp(OnComplete)](FHttpRequestPtr, FHttpResponsePtr Resp, bool Connected)
 		{
 			FPolyglyphResponse Result;
-			if (!bConnected || !Resp.IsValid())
+			if (!Connected || !Resp.IsValid())
 			{
 				Result.Error = TEXT("Could not reach the Polyglyph server. "
 					"Check the base URL and your network.");
@@ -291,14 +297,16 @@ void FPolyglyphClient::SendPushChunk(
 }
 
 void FPolyglyphClient::PullTranslations(
-	const FString& Culture,
-	TFunction<void(const FPolyglyphResponse&)> OnComplete)
+	const FString& InCulture,
+	bool IncludeUnapprovedDrafts,
+	TFunction<void(const FPolyglyphResponse&, const FPolyglyphPullResult&)> OnComplete)
 {
 	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
 	const FString Path = FString::Printf(
-		TEXT("/api/plugin/pull?projectSlug=%s&language=%s&onlyApproved=true"),
+		TEXT("/api/plugin/pull?projectSlug=%s&language=%s&onlyApproved=%s"),
 		*FGenericPlatformHttp::UrlEncode(Project->ProjectSlug),
-		*FGenericPlatformHttp::UrlEncode(Culture));
+		*FGenericPlatformHttp::UrlEncode(InCulture),
+		IncludeUnapprovedDrafts ? TEXT("false") : TEXT("true"));
 
 	FString Error;
 	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(TEXT("GET"), Path, Error);
@@ -306,21 +314,41 @@ void FPolyglyphClient::PullTranslations(
 	{
 		FPolyglyphResponse Result;
 		Result.Error = Error;
-		OnComplete(Result);
+		OnComplete(Result, FPolyglyphPullResult());
 		return;
 	}
 
-	Send(Request.ToSharedRef(), MoveTemp(OnComplete));
+	Send(Request.ToSharedRef(),
+		[OnComplete = MoveTemp(OnComplete)](const FPolyglyphResponse& Response)
+		{
+			FPolyglyphPullResult PullResult;
+			if (!Response.bSuccess)
+			{
+				OnComplete(Response, PullResult);
+				return;
+			}
+
+			FString ParseError;
+			if (!FPolyglyphPullResult::ParsePullResponse(Response.Json, PullResult, ParseError))
+			{
+				FPolyglyphResponse InvalidResponse = Response;
+				InvalidResponse.bSuccess = false;
+				InvalidResponse.Error = ParseError;
+				OnComplete(InvalidResponse, PullResult);
+				return;
+			}
+
+			OnComplete(Response, PullResult);
+		});
 }
 
 void FPolyglyphClient::TriggerTranslate(
-	const FString& Language,
-	const FString& Mode,
-	bool bMock,
+	const FString& InLanguage,
+	const FString& InMode,
+	bool Mock,
 	TFunction<void(const FPolyglyphResponse&)> OnComplete)
 {
 	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
-
 	FString Error;
 	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request =
 		MakeRequest(TEXT("POST"), TEXT("/api/plugin/translate"), Error);
@@ -334,12 +362,12 @@ void FPolyglyphClient::TriggerTranslate(
 
 	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("projectSlug"), Project->ProjectSlug);
-	Root->SetStringField(TEXT("language"), Language);
-	if (!Mode.IsEmpty())
+	Root->SetStringField(TEXT("language"), InLanguage);
+	if (!InMode.IsEmpty())
 	{
-		Root->SetStringField(TEXT("mode"), Mode);
+		Root->SetStringField(TEXT("mode"), InMode);
 	}
-	if (bMock)
+	if (Mock)
 	{
 		Root->SetBoolField(TEXT("mock"), true);
 	}
@@ -376,14 +404,14 @@ void FPolyglyphClient::GetJob(
 }
 
 void FPolyglyphClient::ExportCulturePo(
-	const FString& Culture,
-	TFunction<void(bool bSuccess, const FString& PoTextOrError)> OnComplete)
+	const FString& InCulture,
+	TFunction<void(bool Success, const FString& PoTextOrError)> OnComplete)
 {
 	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
 	const FString Path = FString::Printf(
 		TEXT("/api/plugin/export?projectSlug=%s&language=%s&format=po&onlyApproved=true"),
 		*FGenericPlatformHttp::UrlEncode(Project->ProjectSlug),
-		*FGenericPlatformHttp::UrlEncode(Culture));
+		*FGenericPlatformHttp::UrlEncode(InCulture));
 
 	FString Error;
 	const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(TEXT("GET"), Path, Error);
@@ -395,9 +423,9 @@ void FPolyglyphClient::ExportCulturePo(
 
 	// The export body is a PO file, not JSON, so read the raw content instead of using Send.
 	Request->OnProcessRequestComplete().BindLambda(
-		[OnComplete = MoveTemp(OnComplete)](FHttpRequestPtr, FHttpResponsePtr Resp, bool bConnected)
+		[OnComplete = MoveTemp(OnComplete)](FHttpRequestPtr, FHttpResponsePtr Resp, bool Connected)
 		{
-			if (!bConnected || !Resp.IsValid())
+			if (!Connected || !Resp.IsValid())
 			{
 				OnComplete(false, TEXT("Could not reach the Polyglyph server. "
 					"Check the base URL and your network."));
@@ -461,7 +489,6 @@ void FPolyglyphClient::SendEnrichChunk(
 		(*OnComplete)(Result);
 		return;
 	}
-
 	TArray<TSharedPtr<FJsonValue>> ItemValues;
 	for (const FPolyglyphEnrichItem& Item : (*Chunks)[ChunkIndex])
 	{
@@ -551,10 +578,10 @@ void FPolyglyphClient::SendEnrichChunk(
 		});
 }
 
-void FPolyglyphClient::PumpHttp(const bool& bDone, double TimeoutSeconds)
+void FPolyglyphClient::PumpHttp(const bool& InDone, double TimeoutSeconds)
 {
 	const double Start = FPlatformTime::Seconds();
-	while (!bDone && (FPlatformTime::Seconds() - Start) < TimeoutSeconds)
+	while (!InDone && (FPlatformTime::Seconds() - Start) < TimeoutSeconds)
 	{
 		FHttpModule::Get().GetHttpManager().Tick(0.05f);
 		FPlatformProcess::Sleep(0.05f);

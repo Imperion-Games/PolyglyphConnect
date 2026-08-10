@@ -49,10 +49,10 @@ namespace
 	}
 
 	/** Drive the HTTP manager on this thread until the request completes or times out. */
-	void PumpUntil(const bool& bInDone, const double InTimeoutSeconds)
+	void PumpUntil(const bool& InDone, const double InTimeoutSeconds)
 	{
 		const double Start = FPlatformTime::Seconds();
-		while (!bInDone && (FPlatformTime::Seconds() - Start) < InTimeoutSeconds)
+		while (!InDone && (FPlatformTime::Seconds() - Start) < InTimeoutSeconds)
 		{
 			FHttpModule::Get().GetHttpManager().Tick(0.05f);
 			FPlatformProcess::Sleep(0.05f);
@@ -64,22 +64,22 @@ namespace
 	{
 		const double Start = FPlatformTime::Seconds();
 		FPolyglyphJob JobState;
-		bool bReqOk = true;
-		while (!JobState.IsFinished() && bReqOk && (FPlatformTime::Seconds() - Start) < 3600.0)
+		bool RequestSucceeded = true;
+		while (!JobState.IsFinished() && RequestSucceeded && (FPlatformTime::Seconds() - Start) < 3600.0)
 		{
-			bool bGot = false;
-			FPolyglyphClient::GetJob(InJob.JobId, [&bGot, &bReqOk, &JobState](const FPolyglyphResponse& Response)
+			bool Received = false;
+			FPolyglyphClient::GetJob(InJob.JobId, [&Received, &RequestSucceeded, &JobState](const FPolyglyphResponse& Response)
 			{
-				bReqOk = Response.bSuccess;
+				RequestSucceeded = Response.bSuccess;
 				if (Response.bSuccess)
 				{
-					FPolyglyphJob::FromJson(Response.Json, JobState);
+					FPolyglyphJob::ParseJobResponse(Response.Json, JobState);
 				}
-				bGot = true;
+				Received = true;
 			});
-			PumpUntil(bGot, 60.0);
+			PumpUntil(Received, 60.0);
 
-			if (bReqOk && !JobState.IsFinished())
+			if (RequestSucceeded && !JobState.IsFinished())
 			{
 				FPlatformProcess::Sleep(3.0f);
 			}
@@ -101,18 +101,18 @@ namespace
 			return 1;
 		}
 
-		bool bDone = false;
-		bool bOk = false;
+		bool Completed = false;
+		bool Succeeded = false;
 		FString Message;
-		FPolyglyphClient::PushStrings(Strings, [&bDone, &bOk, &Message](const FPolyglyphResponse& Response)
+		FPolyglyphClient::PushStrings(Strings, [&Completed, &Succeeded, &Message](const FPolyglyphResponse& Response)
 		{
-			bOk = Response.bSuccess;
+			Succeeded = Response.bSuccess;
 			Message = Response.Error;
-			bDone = true;
+			Completed = true;
 		});
-		PumpUntil(bDone, 300.0);
+		PumpUntil(Completed, 300.0);
 
-		if (bOk)
+		if (Succeeded)
 		{
 			UE_LOG(LogPolyglyphSync, Display, TEXT("Pushed %d source string(s)."), Strings.Num());
 			return 0;
@@ -122,28 +122,28 @@ namespace
 	}
 
 	/** Trigger translation for all enabled languages, optionally waiting for completion. */
-	int32 RunTranslate(const FString& InMode, const bool bInMock, const bool bInWait)
+	int32 RunTranslate(const FString& InMode, const bool Mock, const bool Wait)
 	{
-		bool bDone = false;
-		bool bOk = false;
+		bool Completed = false;
+		bool Succeeded = false;
 		FString Summary;
 		TArray<FPolyglyphTriggeredJob> Jobs;
-		FPolyglyphTranslate::Run(InMode, bInMock,
-			[&bDone, &bOk, &Summary, &Jobs](bool bSuccess, const FString& InSummary, const TArray<FPolyglyphTriggeredJob>& InJobs)
+		FPolyglyphTranslate::Run(InMode, Mock,
+			[&Completed, &Succeeded, &Summary, &Jobs](bool Success, const FString& InSummary, const TArray<FPolyglyphTriggeredJob>& InJobs)
 		{
-			bOk = bSuccess;
+			Succeeded = Success;
 			Summary = InSummary;
 			Jobs = InJobs;
-			bDone = true;
+			Completed = true;
 		});
-		PumpUntil(bDone, 120.0);
+		PumpUntil(Completed, 120.0);
 		UE_LOG(LogPolyglyphSync, Display, TEXT("%s"), *Summary);
 
-		if (!bOk)
+		if (!Succeeded)
 		{
 			return 1;
 		}
-		if (!bInWait)
+		if (!Wait)
 		{
 			return 0;
 		}
@@ -162,19 +162,19 @@ namespace
 	/** Pull approved translations (imports + compiles). Returns 0 on success, 1 on failure. */
 	int32 RunPull()
 	{
-		bool bDone = false;
-		bool bOk = false;
+		bool Completed = false;
+		bool Succeeded = false;
 		FString Summary;
-		FPolyglyphPull::Run([&bDone, &bOk, &Summary](bool bSuccess, const FString& InSummary)
+		FPolyglyphPull::Run([&Completed, &Succeeded, &Summary](bool Success, const FString& InSummary)
 		{
-			bOk = bSuccess;
+			Succeeded = Success;
 			Summary = InSummary;
-			bDone = true;
+			Completed = true;
 		});
-		PumpUntil(bDone, 600.0);
+		PumpUntil(Completed, 600.0);
 
 		UE_LOG(LogPolyglyphSync, Display, TEXT("%s"), *Summary);
-		return bOk ? 0 : 1;
+		return Succeeded ? 0 : 1;
 	}
 }
 
@@ -192,12 +192,12 @@ int32 UPolyglyphSyncCommandlet::Main(const FString& Params)
 	TArray<FString> Switches;
 	UCommandlet::ParseCommandLine(*Params, Tokens, Switches);
 
-	const bool bPush = Switches.Contains(TEXT("push"));
-	const bool bTranslate = Switches.Contains(TEXT("translate"));
-	const bool bPull = Switches.Contains(TEXT("pull"));
-	const bool bWait = Switches.Contains(TEXT("wait"));
-	const bool bMock = Switches.Contains(TEXT("mock"));
-	if (!bPush && !bTranslate && !bPull)
+	const bool Push = Switches.Contains(TEXT("push"));
+	const bool Translate = Switches.Contains(TEXT("translate"));
+	const bool Pull = Switches.Contains(TEXT("pull"));
+	const bool Wait = Switches.Contains(TEXT("wait"));
+	const bool Mock = Switches.Contains(TEXT("mock"));
+	if (!Push && !Translate && !Pull)
 	{
 		UE_LOG(LogPolyglyphSync, Error, TEXT("Nothing to do. Pass -push, -translate and/or -pull."));
 		return 1;
@@ -209,15 +209,15 @@ int32 UPolyglyphSyncCommandlet::Main(const FString& Params)
 	ApplyOverrides(Params);
 
 	int32 ExitCode = 0;
-	if (bPush)
+	if (Push)
 	{
 		ExitCode = RunPush();
 	}
-	if (bTranslate && ExitCode == 0)
+	if (Translate && ExitCode == 0)
 	{
-		ExitCode = RunTranslate(TranslateMode, bMock, bWait);
+		ExitCode = RunTranslate(TranslateMode, Mock, Wait);
 	}
-	if (bPull && ExitCode == 0)
+	if (Pull && ExitCode == 0)
 	{
 		ExitCode = RunPull();
 	}

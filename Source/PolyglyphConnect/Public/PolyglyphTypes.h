@@ -25,14 +25,14 @@ struct FPolyglyphSourceString
 	/** Optional note that guides the translator/AI (where it appears, tone, etc.). */
 	FString Context;
 
-	/** Optional message-format hint: PLAIN, PLURAL, SELECT, or MULTI. Empty lets the
-	 *  service auto-detect from the markup. */
+	/**
+	 * Optional message-format hint: PLAIN, PLURAL, SELECT, or MULTI.
+	 * Empty lets the service auto-detect from the markup.
+	 */
 	FString Format;
 };
 
-/**
- * One approved translation pulled from Polyglyph (mirrors a GET /api/plugin/pull item).
- */
+/** One translation pulled from Polyglyph (mirrors a GET /api/plugin/pull item). */
 struct FPolyglyphTranslation
 {
 	/** Localization namespace the string belongs to. */
@@ -45,6 +45,44 @@ struct FPolyglyphTranslation
 	FString Value;
 };
 
+/** Translation counts returned with one GET /api/plugin/pull response. */
+struct FPolyglyphPullCounts
+{
+	/** Sets every count to zero. */
+	FPolyglyphPullCounts();
+
+	/** Total source strings in the Polyglyph project. */
+	int32 TotalStrings;
+
+	/** Translations included in this response. */
+	int32 Returned;
+
+	/** Approved translations available for the culture. */
+	int32 Approved;
+
+	/** Draft translations waiting for review. */
+	int32 NeedsReview;
+
+	/** Source strings without a translation. */
+	int32 Untranslated;
+};
+
+/** Parsed translations and counts from one GET /api/plugin/pull response. */
+struct FPolyglyphPullResult
+{
+	/** Translations returned under the request's approval policy. */
+	TArray<FPolyglyphTranslation> Translations;
+
+	/** Server-side counts for the requested culture. */
+	FPolyglyphPullCounts Counts;
+
+	/** Parse a pull body and require its strings and counts contract. */
+	static bool ParsePullResponse(
+		const TSharedPtr<FJsonObject>& InJson,
+		FPolyglyphPullResult& OutResult,
+		FString& OutError);
+};
+
 /**
  * One enrichment record attaching translator-context metadata to an existing key (mirrors a
  * planned POST /api/plugin/enrich item). Character voice, grammatical gender, register, and a
@@ -52,6 +90,9 @@ struct FPolyglyphTranslation
  */
 struct FPolyglyphEnrichItem
 {
+	/** Sets the optional maximum length to zero. */
+	FPolyglyphEnrichItem();
+
 	/** Localization namespace of the key to enrich. */
 	FString Namespace;
 
@@ -68,7 +109,7 @@ struct FPolyglyphEnrichItem
 	FString Register;
 
 	/** Optional maximum display length in characters; 0 means unset. */
-	int32 MaxLength = 0;
+	int32 MaxLength;
 
 	/** Free-text note appended to the string's translation context. */
 	FString Context;
@@ -91,6 +132,9 @@ struct FPolyglyphTriggeredJob
  */
 struct FPolyglyphJob
 {
+	/** Sets numeric progress fields to zero. */
+	FPolyglyphJob();
+
 	/** Job id. */
 	FString Id;
 
@@ -104,10 +148,10 @@ struct FPolyglyphJob
 	FString Mode;
 
 	/** Total strings in the job. */
-	int32 Total = 0;
+	int32 Total;
 
 	/** Strings translated so far. */
-	int32 Completed = 0;
+	int32 Completed;
 
 	/** Error message when the job failed. */
 	FString Error;
@@ -120,7 +164,7 @@ struct FPolyglyphJob
 	}
 
 	/** Populate OutJob from a GET /jobs body (reads the nested `job` object). */
-	static bool FromJson(const TSharedPtr<FJsonObject>& InJson, FPolyglyphJob& OutJob);
+	static bool ParseJobResponse(const TSharedPtr<FJsonObject>& InJson, FPolyglyphJob& OutJob);
 };
 
 /**
@@ -128,29 +172,32 @@ struct FPolyglyphJob
  */
 struct FPolyglyphLanguageStatus
 {
+	/** Sets progress fields to their disabled zero state. */
+	FPolyglyphLanguageStatus();
+
 	/** BCP-47 culture code, e.g. "pt-BR". */
 	FString Code;
 
 	/** Whether the language is enabled for the project. */
-	bool bEnabled = false;
+	bool bEnabled;
 
 	/** Total source strings (the project total, repeated per language). */
-	int32 Total = 0;
+	int32 Total;
 
 	/** Strings with any translation (approved or pending review). */
-	int32 Translated = 0;
+	int32 Translated;
 
 	/** Strings whose translation is approved. */
-	int32 Approved = 0;
+	int32 Approved;
 
 	/** Strings with no translation yet. */
-	int32 Untranslated = 0;
+	int32 Untranslated;
 
 	/** Approved / Total as a 0-100 percentage, as reported by the service. */
-	float ApprovedPct = 0.0f;
+	float ApprovedPct;
 
 	/** True when every string is approved. */
-	bool bComplete = false;
+	bool bComplete;
 };
 
 /**
@@ -158,6 +205,9 @@ struct FPolyglyphLanguageStatus
  */
 struct FPolyglyphProjectStatus
 {
+	/** Sets the project string count to zero. */
+	FPolyglyphProjectStatus();
+
 	/** Project slug echoed by the service. */
 	FString Slug;
 
@@ -168,11 +218,13 @@ struct FPolyglyphProjectStatus
 	FString Brief;
 
 	/** Total source strings in the project. */
-	int32 TotalStrings = 0;
+	int32 TotalStrings;
 
 	/** Per-language progress rows. */
 	TArray<FPolyglyphLanguageStatus> Languages;
 
 	/** Populate OutStatus from a parsed /status body. Returns false when InJson is null. */
-	static bool FromJson(const TSharedPtr<FJsonObject>& InJson, FPolyglyphProjectStatus& OutStatus);
+	static bool ParseStatusResponse(
+		const TSharedPtr<FJsonObject>& InJson,
+		FPolyglyphProjectStatus& OutStatus);
 };

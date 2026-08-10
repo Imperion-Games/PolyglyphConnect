@@ -2,7 +2,9 @@
 
 Unreal Engine editor plugin that connects a project to the **Polyglyph** localization
 service. It gathers source text, pushes it for AI translation plus human review, and
-pulls approved translations back into the engine's native localization.
+pulls translations back into the engine's native localization. Pulls are approved-only
+by default. **Include unapproved drafts** in Project Settings can be enabled for testing;
+draft translations have not been reviewed and should not ship.
 
 Developed against **Unreal Engine 5.7** (the engine used for the rest of the ToaGames
 plugin ecosystem). Editor-only: nothing ships into the packaged game runtime.

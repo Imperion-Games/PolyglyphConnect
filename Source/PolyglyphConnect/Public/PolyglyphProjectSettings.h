@@ -34,6 +34,12 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (DisplayName = "Localization Target"))
 	FString LocalizationTarget;
 
+	/** Whether pull requests include draft translations that have not been reviewed. */
+	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (
+		DisplayName = "Include unapproved drafts",
+		ToolTip = "Draft translations have not been reviewed and should not ship."))
+	bool bIncludeUnapprovedDrafts;
+
 	/** Optional project-relative JSON file that adds or replaces shipped Unreal locale mappings. */
 	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (DisplayName = "Locale Mapping Overrides File"))
 	FString LocaleMappingFile;

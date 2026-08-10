@@ -7,6 +7,8 @@
 #include "Framework/MultiBox/MultiBoxExtender.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "HAL/PlatformProcess.h"
+#include "LocalizationConfigurationScript.h"
+#include "LocalizationDelegates.h"
 #include "LocalizationServiceOperations.h"
 #include "LocalizationTargetTypes.h"
 #include "Misc/FileHelper.h"
@@ -16,6 +18,7 @@
 #include "Textures/SlateIcon.h"
 #include "Widgets/Notifications/SNotificationList.h"
 
+#include "PolyglyphArchive.h"
 #include "PolyglyphClient.h"
 #include "PolyglyphLocaleMapping.h"
 #include "PolyglyphManifest.h"
@@ -57,17 +60,7 @@ void FPolyglyphLocalizationServiceProvider::Init(bool InForceConnection)
 	// on demand by FConnectToProvider and by each toolbar action.
 	static_cast<void>(InForceConnection);
 
-	if (!bRefreshPending && FModuleManager::Get().IsModuleLoaded(TEXT("LocalizationDashboard")))
-	{
-		bRefreshPending = true;
-		RefreshTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
-			TEXT("PolyglyphConnect.RefreshLocalizationDashboard"),
-			0.0f,
-			[this](float InDeltaSeconds)
-			{
-				return RefreshDashboardDetails(InDeltaSeconds);
-			});
-	}
+	QueueDashboardDetailsRefresh();
 }
 
 void FPolyglyphLocalizationServiceProvider::Close()
@@ -201,6 +194,23 @@ void FPolyglyphLocalizationServiceProvider::CustomizeTargetSetToolbar(
 
 #endif // LOCALIZATION_SERVICES_WITH_SLATE
 
+void FPolyglyphLocalizationServiceProvider::QueueDashboardDetailsRefresh()
+{
+	if (bRefreshPending || !FModuleManager::Get().IsModuleLoaded(TEXT("LocalizationDashboard")))
+	{
+		return;
+	}
+
+	bRefreshPending = true;
+	RefreshTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+		TEXT("PolyglyphConnect.RefreshLocalizationDashboard"),
+		0.0f,
+		[this](float InDeltaSeconds)
+		{
+			return RefreshDashboardDetails(InDeltaSeconds);
+		});
+}
+
 bool FPolyglyphLocalizationServiceProvider::RefreshDashboardDetails(float InDeltaSeconds)
 {
 	static_cast<void>(InDeltaSeconds);
@@ -230,10 +240,10 @@ void FPolyglyphLocalizationServiceProvider::AddTargetToolbarButtons(
 		FSlateIcon());
 
 	ToolbarBuilder.AddToolBarButton(
-		FUIAction(FExecuteAction::CreateRaw(this, &FPolyglyphLocalizationServiceProvider::PullApprovedForTarget, InLocalizationTarget)),
+		FUIAction(FExecuteAction::CreateRaw(this, &FPolyglyphLocalizationServiceProvider::PullForTarget, InLocalizationTarget)),
 		NAME_None,
-		LOCTEXT("PolyglyphPullLabel", "Pull Approved"),
-		LOCTEXT("PolyglyphPullTip", "Pull approved translations for every enabled culture, then import and compile them."),
+		LOCTEXT("PolyglyphPullLabel", "Pull Translations"),
+		LOCTEXT("PolyglyphPullTip", "Pull translations using the approval policy in Project Settings, then import and compile them."),
 		FSlateIcon());
 
 	ToolbarBuilder.AddToolBarButton(
@@ -310,13 +320,29 @@ void FPolyglyphLocalizationServiceProvider::PushSourceForTarget(TWeakObjectPtr<U
 	});
 }
 
-void FPolyglyphLocalizationServiceProvider::PullApprovedForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget)
+void FPolyglyphLocalizationServiceProvider::PullForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget)
 {
 	SelectTarget(InLocalizationTarget);
 
-	FPolyglyphPull::Run([](bool InSuccess, const FString& Summary)
+	FPolyglyphPull::Run([this, InLocalizationTarget](bool InSuccess, const FString& Summary)
 	{
-		Notify(Summary, InSuccess);
+		if (!InSuccess || !InLocalizationTarget.IsValid())
+		{
+			Notify(Summary, InSuccess);
+			return;
+		}
+
+		FString RefreshError;
+		if (!FPolyglyphArchive::UpdateWordCountReport(InLocalizationTarget.Get(), RefreshError))
+		{
+			Notify(FString::Printf(TEXT("%s Could not refresh Localization Dashboard counts: %s"), *Summary, *RefreshError), false);
+			return;
+		}
+
+		LocalizationDelegates::OnLocalizationTargetDataUpdated.Broadcast(
+			LocalizationConfigurationScript::GetDataDirectory(InLocalizationTarget.Get()));
+		QueueDashboardDetailsRefresh();
+		Notify(Summary, true);
 	});
 }
 
@@ -414,7 +440,7 @@ ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServicePr
 
 	Operation->SetOutErrorText(LOCTEXT("PolyglyphUploadUnsupported",
 		"Polyglyph owns translations: edit and approve them in the Polyglyph dashboard, then use "
-		"Pull Approved. Uploading translations from the Translation Editor is not supported, "
+		"Pull Translations. Uploading translations from the Translation Editor is not supported, "
 		"because the next pull would overwrite them. Use Push Source to send source text."));
 	return ELocalizationServiceOperationCommandResult::Failed;
 }

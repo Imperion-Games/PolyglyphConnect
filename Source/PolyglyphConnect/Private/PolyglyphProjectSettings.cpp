@@ -10,4 +10,5 @@ UPolyglyphProjectSettings::UPolyglyphProjectSettings()
 	BaseUrl = TEXT("http://localhost:3000");
 	// Default UE localization target; override if the project uses a different target name.
 	LocalizationTarget = TEXT("Game");
+	bIncludeUnapprovedDrafts = false;
 }
