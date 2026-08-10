@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include "Containers/Ticker.h"
 #include "CoreMinimal.h"
 #include "ILocalizationServiceProvider.h"
 
@@ -24,7 +25,7 @@ public:
 	FPolyglyphLocalizationServiceProvider();
 
 	//~ Begin ILocalizationServiceProvider Interface
-	virtual void Init(bool bForceConnection = true) override;
+	virtual void Init(bool InForceConnection = true) override;
 	virtual void Close() override;
 	virtual const FName& GetName() const override;
 	virtual const FText GetDisplayName() const override;
@@ -52,6 +53,9 @@ public:
 	//~ End ILocalizationServiceProvider Interface
 
 private:
+	/** Rebuild open Details panels after Polyglyph becomes the active provider. */
+	bool RefreshDashboardDetails(float InDeltaSeconds);
+
 	/** Add the Polyglyph action buttons to a localization target's toolbar. */
 	void AddTargetToolbarButtons(FToolBarBuilder& ToolbarBuilder, TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget);
 
@@ -87,4 +91,10 @@ private:
 private:
 	/** Provider name used by the LocalizationService feature registry. */
 	FName ProviderName;
+
+	/** One-shot ticker that defers the dashboard refresh until provider selection completes. */
+	FTSTicker::FDelegateHandle RefreshTickerHandle;
+
+	/** Whether a dashboard Details-panel refresh has already been queued. */
+	bool bRefreshPending;
 };

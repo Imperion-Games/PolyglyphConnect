@@ -11,6 +11,8 @@
 #include "LocalizationTargetTypes.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
+#include "PropertyEditorModule.h"
 #include "Textures/SlateIcon.h"
 #include "Widgets/Notifications/SNotificationList.h"
 
@@ -43,17 +45,38 @@ namespace
 
 FPolyglyphLocalizationServiceProvider::FPolyglyphLocalizationServiceProvider()
 	: ProviderName(TEXT("Polyglyph"))
+	, RefreshTickerHandle()
+	, bRefreshPending(false)
 {
 }
 
-void FPolyglyphLocalizationServiceProvider::Init(bool bForceConnection)
+void FPolyglyphLocalizationServiceProvider::Init(bool InForceConnection)
 {
 	// Stateless HTTP client; nothing to establish up front. The connection is validated
 	// on demand by FConnectToProvider and by each toolbar action.
+	static_cast<void>(InForceConnection);
+
+	if (!bRefreshPending && FModuleManager::Get().IsModuleLoaded(TEXT("LocalizationDashboard")))
+	{
+		bRefreshPending = true;
+		RefreshTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+			TEXT("PolyglyphConnect.RefreshLocalizationDashboard"),
+			0.0f,
+			[this](float InDeltaSeconds)
+			{
+				return RefreshDashboardDetails(InDeltaSeconds);
+			});
+	}
 }
 
 void FPolyglyphLocalizationServiceProvider::Close()
 {
+	if (RefreshTickerHandle.IsValid())
+	{
+		FTSTicker::RemoveTicker(RefreshTickerHandle);
+		RefreshTickerHandle.Reset();
+	}
+	bRefreshPending = false;
 }
 
 const FName& FPolyglyphLocalizationServiceProvider::GetName() const
@@ -176,6 +199,23 @@ void FPolyglyphLocalizationServiceProvider::CustomizeTargetSetToolbar(
 }
 
 #endif // LOCALIZATION_SERVICES_WITH_SLATE
+
+bool FPolyglyphLocalizationServiceProvider::RefreshDashboardDetails(float InDeltaSeconds)
+{
+	static_cast<void>(InDeltaSeconds);
+
+	bRefreshPending = false;
+	RefreshTickerHandle.Reset();
+
+	if (FModuleManager::Get().IsModuleLoaded(TEXT("PropertyEditor")))
+	{
+		FPropertyEditorModule& PropertyEditorModule =
+			FModuleManager::GetModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
+		PropertyEditorModule.NotifyCustomizationModuleChanged();
+	}
+
+	return false;
+}
 
 void FPolyglyphLocalizationServiceProvider::AddTargetToolbarButtons(
 	FToolBarBuilder& ToolbarBuilder,

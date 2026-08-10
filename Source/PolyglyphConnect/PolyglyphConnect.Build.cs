@@ -29,6 +29,7 @@ public class PolyglyphConnect : ModuleRules
 			"JsonUtilities",
 			"Localization",
 			"LocalizationService",
+			"PropertyEditor",
 		});
 	}
 }
