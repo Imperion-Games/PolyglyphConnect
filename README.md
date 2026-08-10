@@ -40,3 +40,36 @@ Early scaffold. What exists:
 
 Design notes, the full endpoint map, and the build-out plan live in the Brain:
 `Knowledge/Brain/Plugins/PolyglyphConnect/`.
+
+## Locale mappings
+
+The plugin ships a complete Unreal Engine 5.7 mapping catalog at
+`Resources/LocaleMappings/Unreal-5.7.json`. Each entry keeps Unreal's exact external
+culture code alongside Polyglyph's canonical BCP 47 tag and an English display name.
+
+The Localization Dashboard target only selects entries from that catalog. It does not
+silently guess regional or script variants. A project can add or replace entries with a
+partial JSON mapping file through **Project Settings > Plugins > Polyglyph > Locale
+Mapping Overrides File**. Relative paths are resolved from the project directory.
+
+Use this format for an override file:
+
+```json
+{
+  "schemaVersion": 1,
+  "integration": "unreal",
+  "mappings": [
+    {
+      "externalCode": "STUDIO_ELVISH",
+      "localeTag": "x-studio-elvish",
+      "displayName": "Studio Elvish"
+    }
+  ]
+}
+```
+
+To regenerate the complete catalog for a new engine version, run:
+
+```text
+UnrealEditor-Cmd.exe <Project>.uproject -run=PolyglyphLocaleMap -Output=<path-to-json>
+```

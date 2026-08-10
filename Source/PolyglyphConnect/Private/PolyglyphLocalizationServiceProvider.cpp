@@ -17,6 +17,7 @@
 #include "Widgets/Notifications/SNotificationList.h"
 
 #include "PolyglyphClient.h"
+#include "PolyglyphLocaleMapping.h"
 #include "PolyglyphManifest.h"
 #include "PolyglyphProjectSettings.h"
 #include "PolyglyphPull.h"
@@ -29,16 +30,16 @@
 namespace
 {
 	/** Raise a fire-and-forget editor notification for a completed Polyglyph action. */
-	void Notify(const FString& InMessage, bool bInSuccess)
+	void Notify(const FString& InMessage, bool InSuccess)
 	{
 		FNotificationInfo Info(FText::FromString(InMessage));
 		Info.bFireAndForget = true;
-		Info.ExpireDuration = bInSuccess ? 4.0f : 8.0f;
+		Info.ExpireDuration = InSuccess ? 4.0f : 8.0f;
 
 		const TSharedPtr<SNotificationItem> Item = FSlateNotificationManager::Get().AddNotification(Info);
 		if (Item.IsValid())
 		{
-			Item->SetCompletionState(bInSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
+			Item->SetCompletionState(InSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
 		}
 	}
 }
@@ -261,6 +262,31 @@ void FPolyglyphLocalizationServiceProvider::SelectTarget(TWeakObjectPtr<ULocaliz
 void FPolyglyphLocalizationServiceProvider::PushSourceForTarget(TWeakObjectPtr<ULocalizationTarget> InLocalizationTarget)
 {
 	SelectTarget(InLocalizationTarget);
+	if (!InLocalizationTarget.IsValid())
+	{
+		Notify(TEXT("Select a valid Unreal localization target before pushing source text."), false);
+		return;
+	}
+
+	const UPolyglyphProjectSettings* Project = GetDefault<UPolyglyphProjectSettings>();
+	TMap<FString, FPolyglyphLocaleMapping> LocaleMappings;
+	FString LocaleError;
+	if (!FPolyglyphUnrealLocaleCatalog::Load(Project->LocaleMappingFile, LocaleMappings, LocaleError))
+	{
+		Notify(FString::Printf(TEXT("Could not load locale mappings: %s"), *LocaleError), false);
+		return;
+	}
+
+	FPolyglyphLocaleManifest LocaleManifest;
+	if (!FPolyglyphUnrealLocaleMapper::BuildManifest(
+		InLocalizationTarget.Get(),
+		LocaleMappings,
+		LocaleManifest,
+		LocaleError))
+	{
+		Notify(LocaleError, false);
+		return;
+	}
 
 	TArray<FPolyglyphSourceString> Strings;
 	FString GatherError;
@@ -288,9 +314,9 @@ void FPolyglyphLocalizationServiceProvider::PullApprovedForTarget(TWeakObjectPtr
 {
 	SelectTarget(InLocalizationTarget);
 
-	FPolyglyphPull::Run([](bool bSuccess, const FString& Summary)
+	FPolyglyphPull::Run([](bool InSuccess, const FString& Summary)
 	{
-		Notify(Summary, bSuccess);
+		Notify(Summary, InSuccess);
 	});
 }
 
@@ -299,9 +325,9 @@ void FPolyglyphLocalizationServiceProvider::TranslateForTarget(TWeakObjectPtr<UL
 	SelectTarget(InLocalizationTarget);
 
 	FPolyglyphTranslate::Run(FString(), false,
-		[](bool bSuccess, const FString& Summary, const TArray<FPolyglyphTriggeredJob>& Jobs)
+		[](bool InSuccess, const FString& Summary, const TArray<FPolyglyphTriggeredJob>& Jobs)
 		{
-			Notify(Summary, bSuccess);
+			Notify(Summary, InSuccess);
 		});
 }
 
@@ -349,9 +375,9 @@ ELocalizationServiceOperationCommandResult::Type FPolyglyphLocalizationServicePr
 	bool bOk = false;
 	FString PoTextOrError;
 	FPolyglyphClient::ExportCulturePo(Operation->GetInLocale(),
-		[&bDone, &bOk, &PoTextOrError](bool bSuccess, const FString& InBody)
+		[&bDone, &bOk, &PoTextOrError](bool InSuccess, const FString& InBody)
 		{
-			bOk = bSuccess;
+			bOk = InSuccess;
 			PoTextOrError = InBody;
 			bDone = true;
 		});

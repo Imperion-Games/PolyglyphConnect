@@ -33,4 +33,8 @@ public:
 	/** Name of the UE localization target to gather source strings from (defaults to "Game"). */
 	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (DisplayName = "Localization Target"))
 	FString LocalizationTarget;
+
+	/** Optional project-relative JSON file that adds or replaces shipped Unreal locale mappings. */
+	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (DisplayName = "Locale Mapping Overrides File"))
+	FString LocaleMappingFile;
 };
