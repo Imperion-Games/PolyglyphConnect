@@ -6,6 +6,21 @@ Licensed under the PolyForm Internal Use License 1.0.0. In short: you may use an
 modify this software for your own internal purposes, but you may not distribute it,
 modified or not, to anyone outside your company. See the full terms below.
 
+This is **source-available**, not open source. The source is published so you can read
+it, audit it, and adapt it to your pipeline. ToaGames remains the owner.
+
+What that means in practice:
+
+- **Yes**, use it to build and ship commercial games. PolyglyphConnect is an
+  editor-only plugin, so it never ends up inside your packaged title. Localizing a
+  game you sell is internal use of the plugin.
+- **Yes**, modify it for your own projects, and open issues or pull requests.
+- **No**, do not redistribute the plugin, publish forks, or sell it, whether modified
+  or not.
+
+The model is the one Unreal Engine itself uses: the source is yours to read and build
+with, but it is not yours to give away or resell.
+
 ---
 
 # PolyForm Internal Use License 1.0.0
