@@ -10,6 +10,7 @@
 #include "LocalizationTargetTypes.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Runtime/Launch/Resources/Version.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
@@ -26,7 +27,25 @@ namespace
 		return Key;
 	}
 
-	/** Locate the catalog resource that ships with this plugin. */
+	/**
+	 * Major.Minor of the engine this plugin is compiled against, e.g. "5.7".
+	 *
+	 * Reported to the Polyglyph API so the backend sees the engine actually in use.
+	 * This was previously hardcoded to 5.7, which meant every project reported 5.7
+	 * regardless of the engine it ran on.
+	 */
+	FString GetEngineVersionString()
+	{
+		return FString::Printf(TEXT("%d.%d"), ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION);
+	}
+
+	/**
+	 * Locate the catalog resource that ships with this plugin.
+	 *
+	 * The catalog is a list of language codes, which does not vary between engine
+	 * versions, so one version-agnostic file serves every supported engine. A
+	 * legacy 5.7-specific name is still accepted so an existing install keeps working.
+	 */
 	bool GetShippedCatalogPath(FString& OutPath, FString& OutError)
 	{
 		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("PolyglyphConnect"));
@@ -36,8 +55,24 @@ namespace
 			return false;
 		}
 
-		OutPath = FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources"), TEXT("LocaleMappings"), TEXT("Unreal-5.7.json"));
-		return true;
+		const FString MappingsDir = FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources"), TEXT("LocaleMappings"));
+
+		OutPath = FPaths::Combine(MappingsDir, TEXT("Unreal.json"));
+		if (FPaths::FileExists(OutPath))
+		{
+			return true;
+		}
+
+		// Fall back to the pre-multi-version filename.
+		const FString LegacyPath = FPaths::Combine(MappingsDir, TEXT("Unreal-5.7.json"));
+		if (FPaths::FileExists(LegacyPath))
+		{
+			OutPath = LegacyPath;
+			return true;
+		}
+
+		OutError = FString::Printf(TEXT("No shipped locale catalog found in '%s'."), *MappingsDir);
+		return false;
 	}
 
 	/** Read one JSON mapping record. */
@@ -255,7 +290,7 @@ bool FPolyglyphUnrealLocaleCatalog::WriteCatalog(
 	const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetNumberField(TEXT("schemaVersion"), CatalogSchemaVersion);
 	Root->SetStringField(TEXT("integration"), TEXT("unreal"));
-	Root->SetStringField(TEXT("engineVersion"), TEXT("5.7"));
+	Root->SetStringField(TEXT("engineVersion"), GetEngineVersionString());
 
 	TArray<TSharedPtr<FJsonValue>> JsonMappings;
 	JsonMappings.Reserve(InMappings.Num());

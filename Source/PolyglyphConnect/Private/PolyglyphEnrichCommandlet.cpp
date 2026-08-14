@@ -7,6 +7,7 @@
 #include "Misc/Paths.h"
 
 #include "PolyglyphClient.h"
+#include "PolyglyphCommandletOverrides.h"
 #include "PolyglyphEnrich.h"
 #include "PolyglyphProjectSettings.h"
 #include "PolyglyphSettings.h"
@@ -16,30 +17,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogPolyglyphEnrich, Log, All);
 
 namespace
 {
-	/** Apply optional command-line / env overrides to the settings CDOs before enriching. */
-	void ApplyOverrides(const FString& InParams)
-	{
-		FString Value;
-		if (FParse::Value(*InParams, TEXT("BaseUrl="), Value))
-		{
-			GetMutableDefault<UPolyglyphProjectSettings>()->BaseUrl = Value;
-		}
-		if (FParse::Value(*InParams, TEXT("ProjectSlug="), Value))
-		{
-			GetMutableDefault<UPolyglyphProjectSettings>()->ProjectSlug = Value;
-		}
-
-		FString Key;
-		if (!FParse::Value(*InParams, TEXT("ApiKey="), Key))
-		{
-			Key = FPlatformMisc::GetEnvironmentVariable(TEXT("POLYGLYPH_API_KEY"));
-		}
-		if (!Key.IsEmpty())
-		{
-			GetMutableDefault<UPolyglyphSettings>()->ApiKey = Key;
-		}
 	}
-}
 
 UPolyglyphEnrichCommandlet::UPolyglyphEnrichCommandlet()
 {
@@ -69,7 +47,7 @@ int32 UPolyglyphEnrichCommandlet::Main(const FString& Params)
 		CsvPath = FPaths::Combine(FPaths::ProjectDir(), CsvPath);
 	}
 
-	ApplyOverrides(Params);
+	PolyglyphCommandletOverrides::Apply(Params);
 
 	TArray<FPolyglyphEnrichItem> Items;
 	FString BuildError;
@@ -84,9 +62,9 @@ int32 UPolyglyphEnrichCommandlet::Main(const FString& Params)
 	int32 UnmatchedCount = 0;
 	FString Summary;
 	FPolyglyphEnrich::Push(Items,
-		[&bDone, &bOk, &Summary, &UnmatchedCount](bool bSuccess, const FString& InSummary, int32 InUnmatched)
+		[&bDone, &bOk, &Summary, &UnmatchedCount](bool InSuccess, const FString& InSummary, int32 InUnmatched)
 	{
-		bOk = bSuccess;
+		bOk = InSuccess;
 		Summary = InSummary;
 		UnmatchedCount = InUnmatched;
 		bDone = true;

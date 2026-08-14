@@ -1,7 +1,6 @@
 {
 	"schemaVersion": 1,
 	"integration": "unreal",
-	"engineVersion": "5.7",
 	"mappings": [
 		{
 			"externalCode": "aa",

@@ -9,6 +9,7 @@
 #include "Misc/Parse.h"
 
 #include "PolyglyphClient.h"
+#include "PolyglyphCommandletOverrides.h"
 #include "PolyglyphProjectSettings.h"
 #include "PolyglyphPull.h"
 #include "PolyglyphPush.h"
@@ -20,35 +21,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogPolyglyphSync, Log, All);
 
 namespace
 {
-	/** Apply optional command-line / env overrides to the settings CDOs before syncing. */
-	void ApplyOverrides(const FString& InParams)
-	{
-		FString Value;
-		if (FParse::Value(*InParams, TEXT("BaseUrl="), Value))
-		{
-			GetMutableDefault<UPolyglyphProjectSettings>()->BaseUrl = Value;
-		}
-		if (FParse::Value(*InParams, TEXT("ProjectSlug="), Value))
-		{
-			GetMutableDefault<UPolyglyphProjectSettings>()->ProjectSlug = Value;
-		}
-		if (FParse::Value(*InParams, TEXT("LocalizationTarget="), Value))
-		{
-			GetMutableDefault<UPolyglyphProjectSettings>()->LocalizationTarget = Value;
-		}
-
-		FString Key;
-		if (!FParse::Value(*InParams, TEXT("ApiKey="), Key))
-		{
-			Key = FPlatformMisc::GetEnvironmentVariable(TEXT("POLYGLYPH_API_KEY"));
-		}
-		if (!Key.IsEmpty())
-		{
-			GetMutableDefault<UPolyglyphSettings>()->ApiKey = Key;
-		}
-	}
-
-	/** Drive the HTTP manager on this thread until the request completes or times out. */
+		/** Drive the HTTP manager on this thread until the request completes or times out. */
 	void PumpUntil(const bool& InDone, const double InTimeoutSeconds)
 	{
 		const double Start = FPlatformTime::Seconds();
@@ -199,7 +172,7 @@ int32 UPolyglyphSyncCommandlet::Main(const FString& Params)
 	FString TranslateMode;
 	FParse::Value(*Params, TEXT("mode="), TranslateMode);
 
-	ApplyOverrides(Params);
+	PolyglyphCommandletOverrides::Apply(Params);
 
 	int32 ExitCode = 0;
 	if (Push)

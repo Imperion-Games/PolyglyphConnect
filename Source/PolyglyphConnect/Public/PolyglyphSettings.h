@@ -22,8 +22,10 @@ public:
 	/** Sets the Editor Preferences category/section. */
 	UPolyglyphSettings();
 
-	/** API key sent as the X-Polyglyph-Key header. Generate one in the dashboard; stored
-	 *  per-user and never committed. */
+	/**
+	 * API key sent as the X-Polyglyph-Key header. Generate one in the dashboard; stored
+	 * per-user and never committed.
+	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Connection",
 		Meta = (DisplayName = "API Key", PasswordField = true))
 	FString ApiKey;
