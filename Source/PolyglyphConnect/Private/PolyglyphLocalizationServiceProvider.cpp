@@ -20,6 +20,7 @@
 
 #include "PolyglyphArchive.h"
 #include "PolyglyphClient.h"
+#include "PolyglyphJobWatcher.h"
 #include "PolyglyphLocaleMapping.h"
 #include "PolyglyphProjectSettings.h"
 #include "PolyglyphPull.h"
@@ -63,6 +64,37 @@ namespace
 		}
 
 		return Scheme + TEXT("://") + Host.RightChop(4);
+	}
+
+	/** Label for the Translate button, which says so when the next run will be a mock. */
+	FText TranslateButtonLabel()
+	{
+		return GetDefault<UPolyglyphProjectSettings>()->bMockTranslations
+			? LOCTEXT("PolyglyphTranslateMockLabel", "Translate (Mock)")
+			: LOCTEXT("PolyglyphTranslateLabel", "Translate");
+	}
+
+	/** Tooltip for the Translate button, matching whichever kind of job it will start. */
+	FText TranslateButtonTip()
+	{
+		return GetDefault<UPolyglyphProjectSettings>()->bMockTranslations
+			? LOCTEXT("PolyglyphTranslateMockTip",
+				"Fill every enabled language with placeholder text at no AI cost, to test the pipeline. "
+				"Turn off \"Mock translations\" in Project Settings > Plugins > Polyglyph for real translations.")
+			: LOCTEXT("PolyglyphTranslateTip",
+				"Start an AI translation job for every enabled language (review and approval happen in Polyglyph).");
+	}
+
+	/** Next step to suggest once translation jobs finish, given the current settings. */
+	FString TranslateNextStep(bool InMock)
+	{
+		const UPolyglyphProjectSettings* const Project = GetDefault<UPolyglyphProjectSettings>();
+		if (InMock && !Project->bIncludeUnapprovedDrafts)
+		{
+			return TEXT(" Pull Translations imports it once approved, or with \"Include unapproved drafts\" enabled.");
+		}
+
+		return TEXT(" Use Pull Translations to import.");
 	}
 
 	/** Raise a fire-and-forget editor notification for a completed Polyglyph action. */
@@ -279,11 +311,13 @@ void FPolyglyphLocalizationServiceProvider::AddTargetToolbarButtons(
 		LOCTEXT("PolyglyphPullTip", "Pull translations using the approval policy in Project Settings, then import and compile them."),
 		FSlateIcon());
 
+	// Bound as attributes so the button announces mock runs as soon as the setting changes,
+	// rather than looking identical to a billed translation.
 	ToolbarBuilder.AddToolBarButton(
 		FUIAction(FExecuteAction::CreateRaw(this, &FPolyglyphLocalizationServiceProvider::TranslateForTarget, InLocalizationTarget)),
 		NAME_None,
-		LOCTEXT("PolyglyphTranslateLabel", "Translate"),
-		LOCTEXT("PolyglyphTranslateTip", "Start an AI translation job for every enabled language (review and approval happen in Polyglyph)."),
+		TAttribute<FText>::CreateStatic(&TranslateButtonLabel),
+		TAttribute<FText>::CreateStatic(&TranslateButtonTip),
 		FSlateIcon());
 
 	ToolbarBuilder.AddToolBarButton(
@@ -367,10 +401,24 @@ void FPolyglyphLocalizationServiceProvider::TranslateForTarget(TWeakObjectPtr<UL
 {
 	SelectTarget(InLocalizationTarget);
 
-	FPolyglyphTranslate::Run(FString(), false,
-		[](bool InSuccess, const FString& Summary, const TArray<FPolyglyphTriggeredJob>& Jobs)
+	const bool Mock = GetDefault<UPolyglyphProjectSettings>()->bMockTranslations;
+	FPolyglyphTranslate::Run(FString(), Mock,
+		[Mock](bool InSuccess, const FString& Summary, const TArray<FPolyglyphTriggeredJob>& Jobs)
 		{
-			Notify(Summary, InSuccess);
+			if (!InSuccess)
+			{
+				Notify(Summary, false);
+				return;
+			}
+
+			Notify(Mock ? Summary + TEXT(" Mock run: placeholder text, no AI cost.") : Summary, true);
+
+			// Triggering only queues the work. Watch the jobs so a second notification says when
+			// there is actually something to pull, instead of leaving the user to guess.
+			FPolyglyphJobWatcher::Watch(Jobs, [Mock](bool InCompleted, const FString& InSummary)
+			{
+				Notify(InCompleted ? InSummary + TranslateNextStep(Mock) : InSummary, InCompleted);
+			});
 		});
 }
 
