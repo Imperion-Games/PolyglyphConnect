@@ -44,16 +44,25 @@ review finishes. Draft translations have not been reviewed and should not ship.
 
 ## Dry runs (no AI cost)
 
-`-mock` on the sync commandlet round-trips the whole pipeline with placeholder text
-instead of calling a model, so it spends nothing. Use it to validate a new setup or as a
-CI smoke test:
+A mock run fills translations with placeholder text instead of calling a model, so it
+spends nothing. Use it to validate a new setup or as a CI smoke test.
+
+In the editor, enable **Mock translations (no AI cost)** in
+`Project Settings > Plugins > Polyglyph`. The dashboard button then reads
+**Translate (Mock)**, so a free run never looks like a billed one, and a second
+notification tells you when the jobs finished and there is something to pull. Placeholder
+text is not approved translation: if the pull reports translations waiting for approval,
+turn on **Include unapproved drafts** as well.
+
+Headless, for the same round trip:
 
 ```text
-UnrealEditor-Cmd <Project>.uproject -run=PolyglyphSync -push -translate -pull -mock
+UnrealEditor-Cmd <Project>.uproject -run=PolyglyphSync -push -translate -pull -mock -wait
 ```
 
-This is currently commandlet-only; the Localization Dashboard's **Translate** button
-always runs a real, billed job.
+`-wait` matters whenever `-translate` and `-pull` share a run: without it the pull fires
+before the jobs finish. The commandlet takes `-mock` explicitly and ignores the project
+setting, so a CI run is never mock by accident.
 
 ## Headless / CI
 
