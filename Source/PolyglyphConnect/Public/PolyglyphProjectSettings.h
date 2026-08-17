@@ -40,6 +40,12 @@ public:
 		ToolTip = "Draft translations have not been reviewed and should not ship."))
 	bool bIncludeUnapprovedDrafts;
 
+	/** Whether the dashboard's Translate action runs a no-cost mock job instead of a real one. */
+	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (
+		DisplayName = "Mock translations (no AI cost)",
+		ToolTip = "Fills translations with placeholder text instead of calling a model, so the pipeline can be tested for free. Mock text is not a translation and must not ship. The sync commandlet has its own -mock switch and ignores this setting."))
+	bool bMockTranslations;
+
 	/** Optional project-relative JSON file that adds or replaces shipped Unreal locale mappings. */
 	UPROPERTY(Config, EditAnywhere, Category = "Localization", Meta = (DisplayName = "Locale Mapping Overrides File"))
 	FString LocaleMappingFile;
