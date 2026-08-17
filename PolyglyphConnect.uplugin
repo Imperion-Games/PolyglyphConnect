@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 3,
-	"VersionName": "0.4",
+	"Version": 4,
+	"VersionName": "0.5",
 	"EngineVersion": "5.4.0",
 	"FriendlyName": "PolyglyphConnect",
 	"Description": "Localization service provider for Polyglyph. Adds Polyglyph to the native Localization Dashboard (push source, translate, pull translations) and ships utility commandlets to feed custom translator context such as character voice.",
