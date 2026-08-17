@@ -12,4 +12,5 @@ UPolyglyphProjectSettings::UPolyglyphProjectSettings()
 	// Default UE localization target; override if the project uses a different target name.
 	LocalizationTarget = TEXT("Game");
 	bIncludeUnapprovedDrafts = false;
+	bMockTranslations = false;
 }
